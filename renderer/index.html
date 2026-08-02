@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' scrawl:; img-src 'self' scrawl: data: blob:; style-src 'self' 'unsafe-inline';">
+  <title>Scrawl</title>
+  <link rel="stylesheet" href="css/scrawl.css">
+  <style>
+    /* Splash de arranque, inline a proposito: pinta en el primer frame del
+     * documento, antes de que el CSS externo y los modulos ES esten cargados.
+     * Es lo que mata el FOUC. El flash del compositor DWM es otro problema y se
+     * resuelve en main.js con el metodo off-screen.
+     *
+     * Es liso a proposito: sin geometria que "salte" cuando la app aparece
+     * encima con su fade, el handoff es imperceptible. */
+    #sc-boot {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      background: #0d0d0d;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #e0a04a;
+      opacity: 1;
+      transition: opacity .34s cubic-bezier(.22, 1, .36, 1);
+    }
+    #sc-boot.gone { opacity: 0; }
+    #sc-boot svg { opacity: .5; }
+  </style>
+</head>
+<body>
+  <div id="sc-boot">
+    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 16C4.5 9 7.5 20 9.5 13S14 17 16 10.5 19.5 9 21 7"/>
+    </svg>
+  </div>
+
+  <div id="sc-app">
+    <!-- ── titlebar propia (la ventana va con frame:false) ─────────────── -->
+    <header class="sc-title">
+      <span class="sc-title__mark" data-icon="mark" data-size="17"></span>
+      <span class="sc-title__name">Scrawl</span>
+
+      <nav class="sc-title__menu">
+        <button class="sc-menubtn" data-menu="file">File</button>
+        <button class="sc-menubtn" data-menu="edit">Edit</button>
+        <button class="sc-menubtn" data-menu="image">Image</button>
+        <button class="sc-menubtn" data-menu="view">View</button>
+      </nav>
+
+      <span class="sc-title__spacer"></span>
+      <span class="sc-title__doc" id="sc-docname">Untitled</span>
+      <span class="sc-title__spacer"></span>
+
+      <div class="sc-winbtns">
+        <button class="sc-winbtn" id="sc-min"   data-icon="winMin"   data-size="12" data-tip="Minimize"></button>
+        <button class="sc-winbtn" id="sc-max"   data-icon="winMax"   data-size="12" data-tip="Maximize"></button>
+        <button class="sc-winbtn sc-winbtn--close" id="sc-close" data-icon="winClose" data-size="12" data-tip="Close"></button>
+      </div>
+    </header>
+
+    <div class="sc-body">
+      <!-- ── herramientas ─────────────────────────────────────────────── -->
+      <nav class="sc-tools" id="sc-tools">
+        <button class="sc-tool" data-tool="brush"   data-icon="brush"   data-tip="Paintbrush" data-key="B"></button>
+        <button class="sc-tool" data-tool="pencil"  data-icon="pencil"  data-tip="Pencil"     data-key="P"></button>
+        <button class="sc-tool" data-tool="marker"  data-icon="marker"  data-tip="Marker"     data-key="M"></button>
+        <button class="sc-tool" data-tool="airbrush" data-icon="airbrush" data-tip="Airbrush" data-key="A"></button>
+        <button class="sc-tool" data-tool="eraser"  data-icon="eraser"  data-tip="Eraser"     data-key="E"></button>
+
+        <div class="sc-tools__rule"></div>
+
+        <button class="sc-tool" data-tool="line"    data-icon="line"    data-tip="Straight line" data-key="L"></button>
+        <button class="sc-tool" data-tool="fill"    data-icon="fill"    data-tip="Flood fill"    data-key="G"></button>
+        <button class="sc-tool" data-tool="picker"  data-icon="picker"  data-tip="Eyedropper"    data-key="I"></button>
+        <button class="sc-tool" data-tool="pan"     data-icon="hand"    data-tip="Pan"           data-key="H"></button>
+
+        <div class="sc-tools__spacer"></div>
+
+        <button class="sc-tool" id="sc-undo" data-icon="undo" data-tip="Undo" data-key="Ctrl+Z"></button>
+        <button class="sc-tool" id="sc-redo" data-icon="redo" data-tip="Redo" data-key="Ctrl+Shift+Z"></button>
+      </nav>
+
+      <!-- ── lienzo ───────────────────────────────────────────────────── -->
+      <div class="sc-view" id="sc-view">
+        <canvas id="sc-canvas"></canvas>
+
+        <div class="sc-zoom">
+          <button class="sc-zoom__btn" id="sc-zoom-out" data-icon="minus" data-size="14" data-tip="Zoom out" data-key="-"></button>
+          <button class="sc-zoom__val" id="sc-zoom-val" data-tip="Reset to 100%" data-key="Ctrl+1">100%</button>
+          <button class="sc-zoom__btn" id="sc-zoom-in"  data-icon="plus"  data-size="14" data-tip="Zoom in" data-key="+"></button>
+          <button class="sc-zoom__btn" id="sc-zoom-fit" data-icon="fit"   data-size="14" data-tip="Fit to window" data-key="Ctrl+0"></button>
+        </div>
+      </div>
+
+      <!-- ── paneles ──────────────────────────────────────────────────── -->
+      <aside class="sc-panels">
+        <!-- color -->
+        <section class="sc-panel">
+          <div class="sc-panel__head">
+            <span class="sc-panel__title">Color</span>
+            <div class="sc-panel__actions">
+              <button class="sc-iconbtn" id="sc-swap" data-icon="swap" data-size="14"
+                      data-tip="Swap with previous" data-key="X"></button>
+            </div>
+          </div>
+          <div class="sc-panel__body">
+            <div class="sc-color__wheel"><canvas id="sc-wheel"></canvas></div>
+            <div class="sc-color__row">
+              <button class="sc-color__chip" id="sc-chip" data-tip="Current color"></button>
+              <input class="sc-color__hex" id="sc-hex" spellcheck="false" maxlength="7" value="#e8e8e8">
+            </div>
+            <div class="sc-swatches" id="sc-swatches"></div>
+          </div>
+        </section>
+
+        <!-- pincel -->
+        <section class="sc-panel">
+          <div class="sc-panel__head">
+            <span class="sc-panel__title" id="sc-brush-title">Brush</span>
+          </div>
+          <div class="sc-panel__body">
+            <div class="sc-preview"><canvas id="sc-preview"></canvas></div>
+            <div id="sc-brush-fields"></div>
+
+            <div class="sc-press">
+              <span class="sc-press__label">Pressure</span>
+              <div class="sc-press__bar"><div class="sc-press__fill" id="sc-press-fill"></div></div>
+              <span class="sc-press__val" id="sc-press-val">0%</span>
+              <span class="sc-press__src" id="sc-press-src" data-tip="Input device reporting pressure">—</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- capas -->
+        <section class="sc-panel sc-panel--grow">
+          <div class="sc-panel__head">
+            <span class="sc-panel__title">Layers</span>
+            <div class="sc-panel__actions">
+              <button class="sc-iconbtn" id="sc-layer-add"  data-icon="plus"      data-size="15" data-tip="New layer"       data-key="Ctrl+Shift+N"></button>
+              <button class="sc-iconbtn" id="sc-layer-dup"  data-icon="duplicate" data-size="15" data-tip="Duplicate layer" data-key="Ctrl+J"></button>
+              <button class="sc-iconbtn" id="sc-layer-merge" data-icon="merge"    data-size="15" data-tip="Merge down"      data-key="Ctrl+E"></button>
+              <button class="sc-iconbtn danger" id="sc-layer-del" data-icon="trash" data-size="15" data-tip="Delete layer"></button>
+            </div>
+          </div>
+          <div class="sc-panel__body" style="padding-bottom:8px">
+            <div class="sc-field" style="margin-top:2px">
+              <div class="sc-field__top">
+                <span class="sc-field__label">Opacity</span>
+                <span class="sc-field__val" id="sc-layer-op-val">100%</span>
+              </div>
+              <div class="sc-slider" id="sc-layer-op" tabindex="0">
+                <div class="sc-slider__track"><div class="sc-slider__fill"></div></div>
+                <div class="sc-slider__thumb"></div>
+              </div>
+            </div>
+            <div class="sc-field">
+              <div class="sc-select" id="sc-layer-blend"></div>
+            </div>
+          </div>
+          <div class="sc-layers" id="sc-layers"></div>
+        </section>
+      </aside>
+    </div>
+
+    <!-- ── statusbar ──────────────────────────────────────────────────── -->
+    <footer class="sc-status">
+      <span class="sc-status__item" data-tip="Canvas size">
+        <span data-icon="canvas" data-size="12"></span>
+        <span id="sc-st-size">—</span>
+      </span>
+      <span class="sc-status__item" data-tip="Cursor position on the canvas">
+        <span data-icon="crosshair" data-size="12"></span>
+        <span id="sc-st-pos">—</span>
+      </span>
+      <span class="sc-status__item" data-tip="Undo steps in memory">
+        <span data-icon="history" data-size="12"></span>
+        <span id="sc-st-hist">0</span>
+      </span>
+      <span class="sc-status__spacer"></span>
+      <span class="sc-status__hint" id="sc-st-hint"></span>
+    </footer>
+  </div>
+
+  <div class="sc-toasts" id="sc-toasts"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

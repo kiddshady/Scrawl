@@ -1,0 +1,8 @@
+# dependencias
+node_modules/
+
+# salida del empaquetado
+dist/
+
+# capturas de verificacion: se regeneran con npm run shot
+.shots/

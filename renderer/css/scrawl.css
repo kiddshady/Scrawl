@@ -1,0 +1,961 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Scrawl — design system
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Grises NEUTROS PUROS, sin un grado de tinte. No es minimalismo por moda: en
+   una app de dibujo cualquier color en el chrome recalibra el ojo y te miente
+   sobre el color que estas viendo en el lienzo. Un panel apenas azulado hace
+   que tu gris parezca calido. Por eso todo el chrome es acromatico y el unico
+   color de la interfaz es el ambar del acento, usado como bisturi.
+
+   El ambar tambien es deliberado: es el matiz que menos molesta en oscuridad
+   (misma razon por la que las salas de revelado eran ambar) y es el color del
+   grafito calido, asi que le queda al tema de la app.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* superficies, por elevacion */
+  --sc-bg:    #0d0d0d;   /* base de la app / vacio alrededor del lienzo */
+  --sc-s1:    #151515;   /* paneles y barras */
+  --sc-s2:    #1d1d1d;   /* elevado: campos, popovers, items */
+  --sc-s3:    #262626;   /* hover */
+  --sc-s4:    #323232;   /* press / activo sin acento */
+  --sc-s5:    #3d3d3d;   /* bordes de control, thumbs */
+
+  /* hairlines: divisores sutiles, nunca para separar planos */
+  --sc-line:      rgba(255, 255, 255, .06);
+  --sc-line-soft: rgba(255, 255, 255, .035);
+
+  /* texto, en escalera de enfasis */
+  --sc-tx:   #e8e8e8;
+  --sc-tx2:  #9b9b9b;
+  --sc-tx3:  #616161;
+  --sc-tx4:  #454545;   /* disabled */
+
+  /* el unico acento. marca la herramienta activa, el foco, la accion primaria */
+  --sc-ac:      #e0a04a;
+  --sc-ac-hi:   #efb35f;
+  --sc-ac-dim:  #9c6e30;
+  --sc-ac-soft: rgba(224, 160, 74, .20);
+  --sc-ac-glow: rgba(224, 160, 74, .32);
+
+  /* estado, solo para estado */
+  --sc-danger: #d05f52;
+
+  /* profundidad por sombra: los planos se separan con elevacion, no con bordes */
+  --sc-sh1: 0 2px 8px rgba(0, 0, 0, .45);
+  --sc-sh2: 0 8px 26px rgba(0, 0, 0, .55);
+  --sc-sh3: 0 18px 52px rgba(0, 0, 0, .65);
+
+  /* esquinas apenas redondeadas: suavizan sin volverse blandas */
+  --sc-r-sm: 5px;
+  --sc-r:    7px;
+  --sc-r-lg: 10px;
+
+  /* movimiento. una sola curva firma para toda la app */
+  --sc-ease: cubic-bezier(.22, 1, .36, 1);
+  --sc-t-fast: .13s;
+  --sc-t:      .2s;
+  --sc-t-slow: .32s;
+
+  /* tipografia: sans para la UI, mono SOLO para datos exactos */
+  --sc-font: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --sc-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+
+  /* metricas del layout */
+  --sc-title-h: 34px;
+  --sc-tool-w:  50px;
+  --sc-panel-w: 268px;
+  --sc-status-h: 26px;
+}
+
+/* ── reset ────────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--sc-bg);
+  color: var(--sc-tx);
+  font-family: var(--sc-font);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* El shell no es seleccionable (se siente nativo). El contenido real hace
+ * opt-in explicito mas abajo — negarle copiar al usuario es hostil. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.sc-selectable, input, textarea, [contenteditable], code, pre, .sc-num {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input  { font: inherit; color: inherit; }
+
+/* ── controles propios (nada de Chromium crudo) ───────────────────────────── */
+
+/* el resaltado de seleccion es un tinte del acento, no el azul del sistema */
+::selection { background: var(--sc-ac-soft); color: var(--sc-tx); }
+
+/* scrollbars finas, sin flechas, thumb que flota y se ilumina con hover */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--sc-s4);
+  border-radius: 8px;
+  /* borde transparente + clip = el thumb no toca los bordes del canal */
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background var(--sc-t) var(--sc-ease);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--sc-s5); background-clip: content-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* anillo de foco propio, y SOLO con teclado */
+:focus { outline: none; }
+:focus-visible {
+  outline: none;
+  /* doble anillo (fondo + acento) para que se lea sobre cualquier superficie,
+   * y con box-shadow en vez de outline para que siga el border-radius */
+  box-shadow: 0 0 0 2px var(--sc-s1), 0 0 0 3px var(--sc-ac);
+}
+
+/* ── layout ───────────────────────────────────────────────────────────────── */
+
+#sc-app {
+  display: grid;
+  grid-template-rows: var(--sc-title-h) 1fr var(--sc-status-h);
+  height: 100%;
+  /* la app entra con un fade suave cuando el motor termina de montar: nada
+   * aparece de golpe, ni la app misma */
+  opacity: 0;
+  transition: opacity var(--sc-t-slow) var(--sc-ease);
+}
+#sc-app.ready { opacity: 1; }
+
+.sc-body {
+  display: grid;
+  grid-template-columns: var(--sc-tool-w) 1fr var(--sc-panel-w);
+  min-height: 0;
+  /* Tab oculta los paneles para dejar el lienzo solo. Se anima el grid en vez de
+   * hacerlos desaparecer: el lienzo crece hacia los costados y se ve de donde
+   * salio el espacio. */
+  transition: grid-template-columns var(--sc-t-slow) var(--sc-ease);
+}
+
+/* ── titlebar ─────────────────────────────────────────────────────────────── */
+
+.sc-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 12px;
+  background: var(--sc-s1);
+  -webkit-app-region: drag;
+  position: relative;
+  z-index: 5;
+}
+.sc-title__mark { display: flex; color: var(--sc-ac); flex: none; }
+.sc-title__name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--sc-tx2);
+  flex: none;
+}
+.sc-title__doc {
+  font-size: 12px;
+  color: var(--sc-tx3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sc-title__doc.dirty::after {
+  /* el punto de "sin guardar": circulo dibujado con CSS, no un glifo */
+  content: '';
+  display: inline-block;
+  width: 5px; height: 5px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--sc-ac);
+  vertical-align: middle;
+}
+.sc-title__menu { display: flex; gap: 2px; margin-left: 6px; -webkit-app-region: no-drag; }
+.sc-title__spacer { flex: 1; }
+
+.sc-menubtn {
+  padding: 4px 9px;
+  font-size: 12px;
+  color: var(--sc-tx2);
+  border-radius: var(--sc-r-sm);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-menubtn:hover { background: var(--sc-s3); color: var(--sc-tx); }
+.sc-menubtn.open { background: var(--sc-s4); color: var(--sc-tx); }
+
+.sc-winbtns { display: flex; -webkit-app-region: no-drag; height: 100%; }
+.sc-winbtn {
+  width: 44px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--sc-tx2);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-winbtn:hover { background: var(--sc-s3); color: var(--sc-tx); }
+.sc-winbtn--close:hover { background: var(--sc-danger); color: #fff; }
+
+/* ── toolbar (izquierda) ──────────────────────────────────────────────────── */
+
+.sc-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 0;
+  background: var(--sc-s1);
+  box-shadow: var(--sc-sh1);
+  position: relative;
+  z-index: 3;
+  overflow: hidden;
+  transition: opacity var(--sc-t) var(--sc-ease);
+}
+.sc-tools__gap { height: 8px; flex: none; }
+.sc-tools__rule {
+  width: 22px; height: 1px;
+  background: var(--sc-line);
+  margin: 5px 0;
+  flex: none;
+}
+.sc-tools__spacer { flex: 1; }
+
+.sc-tool {
+  width: 36px; height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--sc-r);
+  color: var(--sc-tx2);
+  position: relative;
+  transition: background var(--sc-t) var(--sc-ease),
+              color var(--sc-t) var(--sc-ease),
+              transform var(--sc-t-fast) var(--sc-ease);
+}
+.sc-tool:hover { background: var(--sc-s3); color: var(--sc-tx); }
+.sc-tool:active { transform: scale(.92); }
+.sc-tool.on { color: var(--sc-ac); background: var(--sc-ac-soft); }
+/* marca del activo: una barrita que crece desde el centro, no un borde que salta */
+.sc-tool::before {
+  content: '';
+  position: absolute;
+  left: -8px; top: 50%;
+  width: 2px; height: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--sc-ac);
+  transform: translateY(-50%);
+  transition: height var(--sc-t) var(--sc-ease);
+}
+.sc-tool.on::before { height: 18px; }
+.sc-tool:disabled { color: var(--sc-tx4); cursor: default; }
+.sc-tool:disabled:hover { background: none; color: var(--sc-tx4); }
+.sc-tool:disabled:active { transform: none; }
+
+/* ── viewport ─────────────────────────────────────────────────────────────── */
+
+.sc-view {
+  position: relative;
+  overflow: hidden;
+  background: var(--sc-bg);
+  min-width: 0;
+}
+#sc-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* sin esto el stylus y el touch hacen scroll/gestos del navegador en vez de
+   * llegar como pointer events */
+  touch-action: none;
+}
+
+/* HUD flotante del zoom, abajo a la izquierda del lienzo */
+.sc-zoom {
+  position: absolute;
+  left: 12px; bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--sc-s2) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-radius: var(--sc-r);
+  box-shadow: var(--sc-sh1);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity var(--sc-t) var(--sc-ease), transform var(--sc-t) var(--sc-ease);
+}
+.sc-view:hover .sc-zoom, .sc-zoom.show { opacity: 1; transform: translateY(0); }
+.sc-zoom__btn {
+  width: 26px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: var(--sc-r-sm);
+  color: var(--sc-tx2);
+  transition: background var(--sc-t-fast) var(--sc-ease), color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-zoom__btn:hover { background: var(--sc-s4); color: var(--sc-tx); }
+.sc-zoom__val {
+  min-width: 52px;
+  text-align: center;
+  font-family: var(--sc-mono);
+  font-size: 11px;
+  color: var(--sc-tx2);
+  border-radius: var(--sc-r-sm);
+  padding: 0 4px;
+  transition: background var(--sc-t-fast) var(--sc-ease), color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-zoom__val:hover { background: var(--sc-s4); color: var(--sc-tx); }
+
+/* ── puck de navegacion ───────────────────────────────────────────────────── */
+
+/* Aparece bajo el puntero con la barra espaciadora: el nucleo hace zoom, el
+ * anillo desplaza. No recibe eventos — es puro afiche, el reparto entre zonas lo
+ * hace la aritmetica en app.js. */
+.sc-puck {
+  /* Superficies propias del componente, y translucidas a proposito: el puck
+   * flota sobre el dibujo del usuario justo cuando lo esta mirando para navegar,
+   * asi que taparlo entero seria contraproducente. */
+  --puck-ring: color-mix(in srgb, var(--sc-s2) 82%, transparent);
+  --puck-core: color-mix(in srgb, var(--sc-s3) 82%, transparent);
+  --puck-hi:   color-mix(in srgb, var(--sc-s4) 88%, transparent);
+  --puck-on:   color-mix(in srgb, var(--sc-s5) 90%, transparent);
+  --puck-line: rgba(255, 255, 255, .10);
+
+  position: absolute;
+  left: 0; top: 0;
+  width: 112px; height: 112px;
+  /* centrado por margen y no por transform: deja el transform entero libre para
+   * la animacion de entrada */
+  margin: -56px 0 0 -56px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(.82);
+  transition: opacity var(--sc-t) var(--sc-ease), transform var(--sc-t) var(--sc-ease);
+}
+.sc-puck.show { opacity: 1; transform: scale(1); }
+
+/* El vidrio: desenfoca lo que hay debajo para que el disco se lea sobre
+ * cualquier dibujo, y la sombra lo despega del lienzo. Mismo tratamiento que el
+ * HUD del zoom, que flota sobre lo mismo. */
+.sc-puck__glass {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  backdrop-filter: blur(9px);
+  box-shadow: var(--sc-sh2);
+}
+.sc-puck__art { position: absolute; inset: 0; display: block; }
+
+.sc-puck__ring {
+  fill: none;
+  stroke: var(--puck-ring);
+  transition: stroke var(--sc-t-fast) var(--sc-ease);
+}
+.sc-puck__core {
+  fill: var(--puck-core);
+  transition: fill var(--sc-t-fast) var(--sc-ease);
+}
+.sc-puck__edge  { fill: none; stroke: var(--puck-line); stroke-width: 1; }
+.sc-puck__spoke { stroke: var(--puck-line); stroke-width: 1.5; stroke-linecap: round; }
+
+.sc-puck__glyph {
+  fill: none;
+  stroke: var(--sc-tx2);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke var(--sc-t-fast) var(--sc-ease);
+}
+
+/* la zona bajo el puntero se ilumina: el puck se comporta como un boton aunque
+ * no reciba un solo evento */
+.sc-puck[data-hover="ring"] .sc-puck__ring  { stroke: var(--puck-hi); }
+.sc-puck[data-hover="ring"] .sc-puck__arrow { stroke: var(--sc-tx); }
+.sc-puck[data-hover="core"] .sc-puck__core  { fill: var(--puck-hi); }
+.sc-puck[data-hover="core"] .sc-puck__lens  { stroke: var(--sc-tx); }
+
+/* Mientras el gesto corre, el acento marca cual de las dos zonas esta mandando —
+ * y se queda SOLO en los glifos. Tintar la superficie fue el primer intento y
+ * quedaba pesimo: un disco ambar de 108px flotando sobre el dibujo es
+ * exactamente el color en el chrome que esta app se prohibe, y encima puesto
+ * arriba del lienzo, que es donde mas miente sobre lo que estas viendo. Con las
+ * flechas en ambar y la superficie subiendo un escalon de gris alcanza y sobra:
+ * son cuatro trazos de 2px, se leen igual y no recalibran el ojo. La otra zona
+ * se apaga, que es la mitad de la senal. */
+.sc-puck[data-active="ring"] .sc-puck__ring  { stroke: var(--puck-on); }
+.sc-puck[data-active="ring"] .sc-puck__arrow { stroke: var(--sc-ac); }
+.sc-puck[data-active="ring"] .sc-puck__lens  { stroke: var(--sc-tx3); }
+.sc-puck[data-active="core"] .sc-puck__core  { fill: var(--puck-on); }
+.sc-puck[data-active="core"] .sc-puck__lens  { stroke: var(--sc-ac); }
+.sc-puck[data-active="core"] .sc-puck__arrow { stroke: var(--sc-tx3); }
+
+/* ── paneles (derecha) ────────────────────────────────────────────────────── */
+
+.sc-panels {
+  display: flex;
+  flex-direction: column;
+  background: var(--sc-s1);
+  box-shadow: var(--sc-sh1);
+  min-height: 0;
+  position: relative;
+  z-index: 3;
+  /* overflow-x oculto para que Tab pueda cerrar la columna a 0 sin que el
+   * contenido se derrame; overflow-y auto para que en una pantalla baja los
+   * paneles scrolleen en vez de comprimirse unos sobre otros. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  transition: opacity var(--sc-t) var(--sc-ease);
+}
+
+/* flex:none es clave: con el shrink por defecto, los paneles se apretaban unos
+ * contra otros y sus titulos terminaban encima del contenido del de al lado. */
+.sc-panel { display: flex; flex-direction: column; flex: none; }
+.sc-panel + .sc-panel { border-top: 1px solid var(--sc-line); }
+/* el de capas es el unico que se estira: si sobra alto, se lo queda */
+.sc-panel--grow { flex: 1 1 auto; min-height: 168px; }
+
+.sc-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px 0 12px;
+  flex: none;
+}
+.sc-panel__title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  color: var(--sc-tx3);
+}
+.sc-panel__actions { margin-left: auto; display: flex; gap: 1px; }
+.sc-panel__body { padding: 2px 12px 12px; }
+
+.sc-iconbtn {
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: var(--sc-r-sm);
+  color: var(--sc-tx3);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease),
+              transform var(--sc-t-fast) var(--sc-ease);
+}
+.sc-iconbtn:hover { background: var(--sc-s3); color: var(--sc-tx); }
+.sc-iconbtn:active { transform: scale(.9); }
+.sc-iconbtn.danger:hover { background: color-mix(in srgb, var(--sc-danger) 22%, transparent); color: var(--sc-danger); }
+.sc-iconbtn:disabled { color: var(--sc-tx4); cursor: default; }
+.sc-iconbtn:disabled:hover { background: none; color: var(--sc-tx4); }
+.sc-iconbtn:disabled:active { transform: none; }
+
+/* ── slider propio ────────────────────────────────────────────────────────── */
+/* No es un <input type=range> re-pintado: es un control propio manejado con
+ * pointer events. En una app de dibujo el slider de tamano se usa cada treinta
+ * segundos, asi que vale tener control total del track, del thumb y del roce. */
+
+.sc-field { margin-top: 9px; }
+.sc-field__top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.sc-field__label {
+  font-size: 11px;
+  color: var(--sc-tx2);
+  flex: 1;
+}
+.sc-field__val {
+  font-family: var(--sc-mono);
+  font-size: 11px;
+  color: var(--sc-tx);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-slider {
+  position: relative;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.sc-slider__track {
+  position: absolute;
+  left: 0; right: 0;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--sc-s4);
+  overflow: hidden;
+}
+.sc-slider__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--sc-ac-dim);
+  transition: background var(--sc-t) var(--sc-ease);
+}
+.sc-slider__thumb {
+  position: absolute;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--sc-tx2);
+  transform: translateX(-50%);
+  transition: background var(--sc-t) var(--sc-ease),
+              box-shadow var(--sc-t) var(--sc-ease),
+              transform var(--sc-t-fast) var(--sc-ease);
+  will-change: left;
+}
+.sc-slider:hover .sc-slider__thumb { background: var(--sc-tx); }
+.sc-slider:hover .sc-slider__fill  { background: var(--sc-ac); }
+.sc-slider.drag .sc-slider__thumb {
+  background: var(--sc-ac);
+  transform: translateX(-50%) scale(1.25);
+  box-shadow: 0 0 0 5px var(--sc-ac-soft);
+}
+.sc-slider.drag .sc-slider__fill { background: var(--sc-ac); }
+.sc-slider:focus-visible { box-shadow: none; }
+.sc-slider:focus-visible .sc-slider__thumb {
+  box-shadow: 0 0 0 2px var(--sc-s1), 0 0 0 3px var(--sc-ac);
+}
+
+/* ── seccion plegable ─────────────────────────────────────────────────────── */
+
+.sc-disc { margin-top: 12px; }
+.sc-disc__btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--sc-tx3);
+  transition: color var(--sc-t) var(--sc-ease);
+}
+.sc-disc__btn:hover { color: var(--sc-tx2); }
+.sc-disc__btn > svg { flex: none; transition: transform var(--sc-t-slow) var(--sc-ease); }
+.sc-disc.open .sc-disc__btn { color: var(--sc-tx2); }
+.sc-disc.open .sc-disc__btn > svg { transform: rotate(180deg); }
+/* hairline que rellena hasta el chevron: separa sin dibujar una caja */
+.sc-disc__line { flex: 1; height: 1px; background: var(--sc-line); }
+
+/* El alto se anima con grid-template-rows (0fr -> 1fr) y no con height: height
+ * exigiria medir el contenido en JS y animarla dispara relayout en cada frame,
+ * mientras el grid interpola solo y sin tocar el layout del resto. */
+.sc-disc__body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--sc-t-slow) var(--sc-ease),
+              opacity var(--sc-t) var(--sc-ease);
+  opacity: 0;
+}
+.sc-disc.open .sc-disc__body { grid-template-rows: 1fr; opacity: 1; }
+.sc-disc__inner { overflow: hidden; min-height: 0; }
+
+/* ── select propio ────────────────────────────────────────────────────────── */
+/* El <select> nativo abre un dropdown del sistema operativo, imposible de
+ * estilar y ajeno a la app. Este es un boton + popover propios. */
+
+.sc-select { position: relative; }
+.sc-select__btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px 0 9px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r-sm);
+  font-size: 11.5px;
+  color: var(--sc-tx);
+  transition: background var(--sc-t-fast) var(--sc-ease);
+}
+.sc-select__btn:hover { background: var(--sc-s3); }
+.sc-select__btn > span { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-select__btn > svg { color: var(--sc-tx3); flex: none; transition: transform var(--sc-t) var(--sc-ease); }
+.sc-select.open .sc-select__btn > svg { transform: rotate(180deg); }
+
+.sc-select__pop {
+  position: fixed;
+  z-index: 60;
+  min-width: 150px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r);
+  box-shadow: var(--sc-sh2), inset 0 0 0 1px var(--sc-line);
+  /* entra y sale con transicion: nada aparece ni desaparece de golpe */
+  opacity: 0;
+  transform: translateY(-4px) scale(.98);
+  transform-origin: top center;
+  transition: opacity var(--sc-t-fast) var(--sc-ease), transform var(--sc-t-fast) var(--sc-ease);
+  pointer-events: none;
+}
+.sc-select__pop.show { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+
+.sc-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--sc-r-sm);
+  font-size: 11.5px;
+  color: var(--sc-tx2);
+  transition: background var(--sc-t-fast) var(--sc-ease), color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-option:hover { background: var(--sc-s3); color: var(--sc-tx); }
+.sc-option.on { color: var(--sc-ac); }
+.sc-option__check { width: 13px; flex: none; display: grid; place-items: center; opacity: 0; transition: opacity var(--sc-t-fast) var(--sc-ease); }
+.sc-option.on .sc-option__check { opacity: 1; }
+
+/* ── color ────────────────────────────────────────────────────────────────── */
+
+.sc-color__wheel {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  /* topeada a proposito: a ancho completo la rueda se comia 244px de alto y
+   * empujaba el panel de capas fuera de la ventana */
+  max-height: 172px;
+  max-width: 172px;
+  margin: 2px auto 4px;
+}
+.sc-color__wheel canvas {
+  display: block;
+  width: 100%; height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+  border-radius: 50%;
+}
+
+.sc-color__row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.sc-color__chip {
+  width: 30px; height: 30px;
+  border-radius: var(--sc-r-sm);
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), var(--sc-sh1);
+  transition: transform var(--sc-t) var(--sc-ease);
+}
+.sc-color__chip:active { transform: scale(.94); }
+.sc-color__hex {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--sc-s2);
+  border: 0;
+  border-radius: var(--sc-r-sm);
+  font-family: var(--sc-mono);
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  color: var(--sc-tx);
+  transition: background var(--sc-t-fast) var(--sc-ease);
+}
+.sc-color__hex:hover { background: var(--sc-s3); }
+.sc-color__hex:focus { background: var(--sc-s3); }
+
+.sc-swatches {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  margin-top: 9px;
+}
+.sc-swatch {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.1);
+  transition: transform var(--sc-t) var(--sc-ease), box-shadow var(--sc-t) var(--sc-ease);
+}
+.sc-swatch:hover {
+  transform: scale(1.18);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.28), var(--sc-sh1);
+}
+.sc-swatch:active { transform: scale(1); }
+
+/* ── indicador de presion ─────────────────────────────────────────────────── */
+/* Existe para poder confirmar de un vistazo que la tablet esta entregando
+ * presion real y no un 0.5 fijo de mouse. Ahorra media hora de dudas. */
+
+.sc-press {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--sc-line-soft);
+}
+.sc-press__label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--sc-tx3); flex: none; }
+.sc-press__bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--sc-s4);
+  overflow: hidden;
+}
+.sc-press__fill {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--sc-ac-dim), var(--sc-ac));
+  transition: width .06s linear;   /* rapido a proposito: tiene que sentirse en vivo */
+}
+.sc-press__val {
+  font-family: var(--sc-mono);
+  font-size: 10.5px;
+  color: var(--sc-tx2);
+  min-width: 30px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sc-press__src {
+  font-size: 10px;
+  color: var(--sc-tx3);
+  min-width: 30px;
+  transition: color var(--sc-t) var(--sc-ease);
+}
+.sc-press__src.pen { color: var(--sc-ac); }
+
+/* ── brush preview ────────────────────────────────────────────────────────── */
+
+.sc-preview {
+  height: 46px;
+  margin: 2px 0 2px;
+  border-radius: var(--sc-r-sm);
+  background: var(--sc-s2);
+  overflow: hidden;
+}
+.sc-preview canvas { display: block; width: 100%; height: 100%; }
+
+/* ── capas ────────────────────────────────────────────────────────────────── */
+
+.sc-layers {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* El fade come solo lo que el scroll recorta: el padding es >= al fade, asi
+   * que en reposo (tope o fondo) ningun item queda dentro de la banda esfumada. */
+  --fade: 14px;
+  padding: 16px 8px;
+  -webkit-mask-image: linear-gradient(to bottom,
+      transparent 0, #000 var(--fade),
+      #000 calc(100% - var(--fade)), transparent 100%);
+          mask-image: linear-gradient(to bottom,
+      transparent 0, #000 var(--fade),
+      #000 calc(100% - var(--fade)), transparent 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sc-layer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: var(--sc-r);
+  background: transparent;
+  cursor: default;
+  position: relative;
+  transition: background var(--sc-t) var(--sc-ease), opacity var(--sc-t) var(--sc-ease);
+}
+.sc-layer:hover { background: var(--sc-s2); }
+.sc-layer.on { background: var(--sc-s3); }
+.sc-layer.on::after {
+  /* la capa activa se marca con una barra en el borde, que crece desde el centro */
+  content: '';
+  position: absolute;
+  left: 0; top: 50%;
+  width: 2px; height: 22px;
+  border-radius: 0 2px 2px 0;
+  background: var(--sc-ac);
+  transform: translateY(-50%);
+}
+.sc-layer.hidden { opacity: .42; }
+/* entrada de una capa nueva: crece y aparece, no salta al DOM */
+.sc-layer.entering { animation: sc-layer-in var(--sc-t-slow) var(--sc-ease); }
+.sc-layer.leaving  { animation: sc-layer-out var(--sc-t) var(--sc-ease) forwards; }
+
+@keyframes sc-layer-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes sc-layer-out {
+  to { opacity: 0; transform: translateX(10px); max-height: 0; padding-top: 0; padding-bottom: 0; }
+}
+
+.sc-layer__eye { flex: none; }
+.sc-layer__thumb {
+  width: 34px; height: 26px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--sc-s4);
+  box-shadow: inset 0 0 0 1px var(--sc-line);
+  overflow: hidden;
+}
+.sc-layer__thumb canvas { display: block; width: 100%; height: 100%; }
+.sc-layer__meta { flex: 1; min-width: 0; }
+.sc-layer__name {
+  font-size: 12px;
+  color: var(--sc-tx);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sc-layer__name input {
+  width: 100%;
+  background: var(--sc-bg);
+  border: 0;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+  color: var(--sc-tx);
+}
+.sc-layer__sub {
+  font-family: var(--sc-mono);
+  font-size: 10px;
+  color: var(--sc-tx3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── tooltips propios ─────────────────────────────────────────────────────── */
+/* El title= nativo es amarillo, tarda un segundo fijo y no se puede estilar.
+ * Este vive portaleado en el body, asi que ningun overflow:hidden lo recorta. */
+
+.sc-tip {
+  position: fixed;
+  z-index: 200;
+  padding: 4px 8px;
+  max-width: 260px;
+  background: var(--sc-s2);
+  color: var(--sc-tx);
+  border-radius: var(--sc-r-sm);
+  box-shadow: var(--sc-sh2), inset 0 0 0 1px var(--sc-line);
+  font-size: 11.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity var(--sc-t-fast) var(--sc-ease), transform var(--sc-t-fast) var(--sc-ease);
+}
+.sc-tip.show { opacity: 1; transform: translateY(0); }
+.sc-tip__key {
+  margin-left: 7px;
+  font-family: var(--sc-mono);
+  font-size: 10.5px;
+  color: var(--sc-tx3);
+}
+
+/* ── statusbar ────────────────────────────────────────────────────────────── */
+
+.sc-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  background: var(--sc-s1);
+  border-top: 1px solid var(--sc-line);
+  font-size: 11px;
+  color: var(--sc-tx3);
+}
+.sc-status__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--sc-mono);
+  font-variant-numeric: tabular-nums;
+}
+.sc-status__item svg { color: var(--sc-tx4); }
+.sc-status__spacer { flex: 1; }
+.sc-status__hint { font-family: var(--sc-font); transition: opacity var(--sc-t) var(--sc-ease); }
+
+/* ── toasts ───────────────────────────────────────────────────────────────── */
+
+.sc-toasts {
+  position: fixed;
+  bottom: 38px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.sc-toast {
+  padding: 7px 14px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r);
+  box-shadow: var(--sc-sh2), inset 0 0 0 1px var(--sc-line);
+  font-size: 12px;
+  color: var(--sc-tx);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: sc-toast-in var(--sc-t-slow) var(--sc-ease);
+}
+.sc-toast.leaving { animation: sc-toast-out var(--sc-t) var(--sc-ease) forwards; }
+.sc-toast svg { color: var(--sc-ac); flex: none; }
+
+@keyframes sc-toast-in  { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes sc-toast-out { to   { opacity: 0; transform: translateY(-6px) scale(.98); } }
+
+/* ── menu desplegable de la titlebar ──────────────────────────────────────── */
+
+.sc-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 208px;
+  padding: 4px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r);
+  box-shadow: var(--sc-sh2), inset 0 0 0 1px var(--sc-line);
+  opacity: 0;
+  transform: translateY(-5px) scale(.98);
+  transform-origin: top left;
+  transition: opacity var(--sc-t-fast) var(--sc-ease), transform var(--sc-t-fast) var(--sc-ease);
+  pointer-events: none;
+}
+.sc-menu.show { opacity: 1; transform: none; pointer-events: auto; }
+
+.sc-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: var(--sc-r-sm);
+  font-size: 12px;
+  color: var(--sc-tx2);
+  transition: background var(--sc-t-fast) var(--sc-ease), color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-menu__item:hover { background: var(--sc-s3); color: var(--sc-tx); }
+.sc-menu__item svg { color: var(--sc-tx3); flex: none; transition: color var(--sc-t-fast) var(--sc-ease); }
+.sc-menu__item:hover svg { color: var(--sc-tx); }
+.sc-menu__item > span { flex: 1; text-align: left; }
+.sc-menu__key { font-family: var(--sc-mono); font-size: 10.5px; color: var(--sc-tx4); }
+.sc-menu__rule { height: 1px; background: var(--sc-line); margin: 4px 6px; }
