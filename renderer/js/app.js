@@ -581,37 +581,74 @@ function newDoc() {
   toast('New drawing', 'newDoc');
 }
 
+/* Documento intacto: una sola capa, nada dibujado, sin archivo detras y sin un
+ * paso de historial. Es el estado de "abri Scrawl para anotar esta captura", y
+ * el unico en el que se puede achicar el lienzo sin riesgo de recortar trabajo,
+ * porque no hay nada que recortar. */
+function pristineDoc() {
+  return doc.layers.length === 1 && !docPath && !dirtyDoc && !history.canUndo;
+}
+
 /* Coloca una imagen en una capa nueva. Es el camino tanto para importar un
- * archivo como para pegar una captura, que es el otro uso central de la app: si
- * la imagen es mas grande que el lienzo, el lienzo crece para contenerla en vez
- * de recortarla. */
+ * archivo como para pegar una captura, que es el otro uso central de la app.
+ *
+ * El lienzo se acomoda a la imagen segun en que estado este el documento:
+ *
+ *   intacto  el lienzo pasa a medir EXACTAMENTE la imagen. Pegar una captura de
+ *            1920x1080 en el lienzo por defecto de 1920x1200 dejaba una banda
+ *            transparente de 120px abajo que despues se colaba en el PNG
+ *            exportado — anotar una captura tiene que dar esa captura, no la
+ *            captura flotando en un lienzo de otra medida.
+ *   con algo dibujado  solo crece, y solo lo necesario para que la imagen entre
+ *            sin recortarse. Achicar aca borraria pixeles del dibujo. */
 async function placeImage(src, label) {
   const img = await loadImage(src);
-  if (img.width > doc.width || img.height > doc.height) {
-    doc.resize(Math.max(doc.width, img.width), Math.max(doc.height, img.height), 'keep');
+  /* La foto del estado va ANTES de tocar el lienzo: el tamano forma parte de lo
+   * que se restaura, asi que capturarla despues del resize haria que deshacer
+   * sacara la capa y dejara el lienzo agrandado para siempre. */
+  const before = docState(doc);
+
+  const fit = pristineDoc()
+    ? { w: img.width, h: img.height }
+    : { w: Math.max(doc.width, img.width), h: Math.max(doc.height, img.height) };
+
+  if (fit.w !== doc.width || fit.h !== doc.height) {
+    doc.resize(fit.w, fit.h, 'keep');
     painter.syncSize();
     updateStatusSize();
     view.fit();
     updateZoomLabel();
   }
-  const before = docState(doc);
+
+  /* Centrada en lo que sobre del lienzo. Cuando el lienzo calzo con la imagen no
+   * sobra nada y esto da 0,0; los dos casos salen de la misma cuenta. Nunca es
+   * negativo: para llegar aca el lienzo ya contiene a la imagen. */
+  const dx = Math.round((doc.width - img.width) / 2);
+  const dy = Math.round((doc.height - img.height) / 2);
+
   const layer = doc.addLayer(doc.layers.length, label);
-  layer.ctx.drawImage(img, 0, 0);
+  layer.ctx.drawImage(img, dx, dy);
   layer.rev++;
   history.push(layersEntry(doc, before, docState(doc), 'place image'));
   layersPanel.markEntering(layer.id);
   markDirty(true);
   refreshAll();
+  // el tamano lo reporta quien decodifico: es el unico que lo sabe de verdad
+  return { w: img.width, h: img.height };
 }
 
 async function pasteImage() {
   const res = await window.scrawl.clip.readImage();
   if (!res) { toast('No image in the clipboard', 'clipboard'); return; }
-  const blob = new Blob([new Uint8Array(res.data)], { type: 'image/png' });
+  /* Blob sin type: el portapapeles puede traer los pixeles (PNG) o el archivo
+   * tal cual, que bien puede ser un JPEG de ShareX. El decodificador sniffea los
+   * bytes, asi que declarar un tipo aca solo abriria la posibilidad de mentirle. */
+  const blob = new Blob([new Uint8Array(res.data)]);
   const url = URL.createObjectURL(blob);
   try {
-    await placeImage(url, 'Pasted');
-    toast(`Pasted ${res.width}×${res.height}`, 'clipboard');
+    // con un archivo detras, la capa lleva su nombre en vez de un 'Pasted' mas
+    const size = await placeImage(url, res.path ? baseName(res.path) : 'Pasted');
+    toast(`Pasted ${size.w}×${size.h}`, 'clipboard');
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -639,17 +676,30 @@ function baseName(p) {
 
 function undo() {
   if (!history.canUndo) return;
+  const size = { w: doc.width, h: doc.height };
   history.undo();
-  afterTimeTravel();
+  afterTimeTravel(size);
 }
 
 function redo() {
   if (!history.canRedo) return;
+  const size = { w: doc.width, h: doc.height };
   history.redo();
-  afterTimeTravel();
+  afterTimeTravel(size);
 }
 
-function afterTimeTravel() {
+function afterTimeTravel(size) {
+  /* Un paso puede cambiar el tamano del lienzo — deshacer un pegado que lo
+   * agrando, por ejemplo — y entonces hay que resincronizar todo lo que depende
+   * de el. Se compara en vez de hacerlo siempre porque re-encajar la vista en
+   * cada Ctrl+Z moveria el zoom debajo de la mano en el 99% de los pasos, que no
+   * tocan el tamano. */
+  if (doc.width !== size.w || doc.height !== size.h) {
+    painter.syncSize();
+    updateStatusSize();
+    view.fit();
+    updateZoomLabel();
+  }
   doc.invalidateBelow();
   doc.recompose();
   layersPanel.render();

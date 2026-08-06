@@ -149,6 +149,13 @@ export function layersEntry(doc, before, after, label = 'layers') {
     // las props se guardan aparte porque el mismo objeto Layer puede aparecer en
     // los dos estados con distinta opacidad o visibilidad
     for (const [layer, props] of s.props) Object.assign(layer, props);
+    /* El tamano se restaura DESPUES de reponer la lista, y el orden no es
+     * indiferente: resize() recorre doc.layers y recorta lo que sobra, asi que
+     * reponiendo primero se redimensionan exactamente las capas que quedan en el
+     * documento, y la que sale conserva su canvas entero. Eso es lo que permite
+     * que rehacer devuelva la imagen completa aunque deshacer haya encogido el
+     * lienzo por debajo de ella. */
+    if (doc.width !== s.width || doc.height !== s.height) doc.resize(s.width, s.height);
     doc.invalidateBelow();
   };
   return {
@@ -166,6 +173,11 @@ export function docState(doc) {
   return {
     layers: doc.layers.slice(),
     activeIndex: doc.activeIndex,
+    /* El tamano del lienzo es parte del estado estructural porque pegar una
+     * imagen mas grande lo agranda. Sin esto, deshacer un pegado sacaria la capa
+     * y dejaria el lienzo estirado, sin forma de volver. */
+    width: doc.width,
+    height: doc.height,
     props: doc.layers.map((l) => [l, {
       opacity: l.opacity, visible: l.visible, blend: l.blend, name: l.name,
     }]),

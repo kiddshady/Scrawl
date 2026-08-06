@@ -348,14 +348,53 @@ ipcMain.handle('file:open-image', async () => {
 });
 
 // ── portapapeles ────────────────────────────────────────────────────────────
+
+// las mismas que acepta el dialogo de importar, y las mismas que baseName sabe
+// sacarle a un nombre de archivo
+const IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'];
+
+/* Ruta de imagen dejada en el portapapeles COMO ARCHIVO en vez de como pixeles.
+ *
+ * No es un caso raro: ShareX — y varios capturadores mas — vienen configurados
+ * para copiar el archivo guardado, no el bitmap. El portapapeles queda entonces
+ * con una lista de archivos y ni una imagen a la vista. Los chats lo pegan igual
+ * porque saben leer archivos, asi que desde afuera parece que la captura esta
+ * ahi y que la app que no la ve esta rota. Windows sintetiza FileNameW a partir
+ * de la lista, que es la via mas simple de leerla; con varios archivos copiados
+ * entrega el primero, que es justo lo que uno querria pegar. */
+function clipboardImagePath() {
+  for (const [format, enc] of [['FileNameW', 'ucs2'], ['FileName', 'latin1']]) {
+    let buf = null;
+    try { buf = clipboard.readBuffer(format); } catch { continue; }
+    if (!buf || !buf.length) continue;
+    // el formato viene terminado en NUL; la ruta es lo de antes
+    const file = buf.toString(enc).split('\0')[0].trim();
+    if (file && IMAGE_EXT.includes(path.extname(file).toLowerCase())) return file;
+  }
+  return null;
+}
+
 /* Pegar una captura es el otro uso central de la app, asi que el puente al
  * portapapeles va cableado desde el arranque aunque la UI de anotacion venga
- * despues. Devuelve PNG crudo, o null si lo que hay copiado no es imagen. */
-ipcMain.handle('clipboard:read-image', () => {
+ * despues.
+ *
+ * Devuelve los bytes crudos de la imagen — PNG si venia como pixeles, el archivo
+ * tal cual si venia como ruta — o null si no hay nada pegable. El renderer los
+ * decodifica igual en los dos casos, asi que no hace falta normalizar el formato
+ * aca: reencodear un JPEG a PNG solo agregaria una perdida de calidad. */
+ipcMain.handle('clipboard:read-image', async () => {
   const img = clipboard.readImage();
-  if (!img || img.isEmpty()) return null;
-  const size = img.getSize();
-  return { data: img.toPNG(), width: size.width, height: size.height };
+  if (img && !img.isEmpty()) return { data: img.toPNG() };
+
+  const file = clipboardImagePath();
+  if (!file) return null;
+  try {
+    return { data: await fs.readFile(file), path: file };
+  } catch (err) {
+    // la ruta puede apuntar a algo ya borrado o a una unidad desconectada
+    console.error(`[portapapeles] ${file}: ${err.message}`);
+    return null;
+  }
 });
 
 ipcMain.handle('clipboard:write-image', (_e, { data }) => {

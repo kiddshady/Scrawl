@@ -11,7 +11,7 @@ npm start
 | --- | --- |
 | `npm start` | Abre la app |
 | `npm run dev` | Abre con DevTools |
-| `npm test` | Autotest del motor (37 aserciones, sale con código 1 si algo falla) |
+| `npm test` | Autotest del motor (44 aserciones, sale con código 1 si algo falla) |
 | `npm run shot` | Abre, dibuja trazos de muestra, guarda `.shots/ui.png` y cierra |
 | `npm run shot:puck` | Lo mismo, con el puck de navegación abierto sobre el dibujo |
 | `npm run icons` | Regenera `build/icon.png` + `.ico` desde la curva de la marca (necesita ImageMagick) |
@@ -35,7 +35,18 @@ npm start
 | `Tab` | Ocultar los paneles |
 | `Ctrl+Shift+N` `Ctrl+J` `Ctrl+E` | Capa nueva, duplicar, aplastar |
 | `Ctrl+S` `Ctrl+O` `Ctrl+Shift+E` | Guardar `.scrawl`, abrir, exportar PNG |
-| `Ctrl+V` | Pegar una captura del portapapeles |
+| `Ctrl+V` | Pegar una captura del portapapeles como capa nueva |
+
+Sobre un documento vacío, pegar ajusta el lienzo al tamaño exacto de la captura —
+anotar una captura tiene que exportar esa captura, no la captura flotando en un
+lienzo de otra medida. Con algo ya dibujado el lienzo solo crece, lo justo para que
+la imagen entre sin recortarse, y la imagen cae centrada.
+
+Pegar acepta las dos formas en que un capturador deja una captura: los píxeles, o la
+ruta del archivo que guardó. ShareX viene configurado de fábrica para lo segundo, y
+una app que solo pide bitmap ve el portapapeles vacío justo cuando la captura está
+ahí — los chats la pegan igual porque saben leer archivos, así que el síntoma parece
+un bug de la app y no una diferencia de formato.
 
 ## Estructura
 
@@ -85,7 +96,8 @@ tablet reportó. Es la razón por la que muchos canvas web se sienten baratos co
 
 `npm test` prueba el motor sin la interfaz: undo exacto, la capa wet, la respuesta a
 la presión, que recomponer una región dé idéntico resultado que recomponer todo,
-borrador, flood fill, capas, el round-trip de guardado y la evicción del historial.
+borrador, flood fill, capas, el round-trip de guardado, la evicción del historial y
+que deshacer un pegado devuelva también el tamaño del lienzo.
 
 `npm run shot` es la contraparte visual: abre la app, dibuja una muestra con cada
 pincel usando presión variable y guarda un PNG. Un cambio en el rasterizado se

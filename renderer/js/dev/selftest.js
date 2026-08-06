@@ -12,7 +12,9 @@
 
 import { ScrawlDoc, clampRect } from '../engine/doc.js';
 import { Painter, makeBrush } from '../engine/brush.js';
-import { History, pixelEntry, grab, snapshotCanvas, fullLayerEntry } from '../engine/history.js';
+import {
+  History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState,
+} from '../engine/history.js';
 import { floodFill } from '../engine/fill.js';
 
 const results = [];
@@ -322,6 +324,50 @@ function testHistoryBudget() {
   ok('el historial sigue siendo utilizable tras evictar', history.canUndo);
 }
 
+// ── 10. pegar una captura mas grande que el lienzo ──────────────────────────
+
+/* Pegar una captura mas grande agranda el lienzo para no recortarla. Lo que se
+ * rompe en silencio es el camino de vuelta: si el tamano no viaja en la foto del
+ * estado, deshacer saca la capa y deja el lienzo estirado, sin forma de volver.
+ * Y como encoger el lienzo recorta las capas, el redo tiene que devolver la
+ * imagen ENTERA, no la parte que entraba en el lienzo chico. */
+function testPasteGrowsCanvas() {
+  const doc = new ScrawlDoc(200, 150);
+  const history = new History();
+
+  const shot = document.createElement('canvas');
+  shot.width = 320;
+  shot.height = 240;
+  const sc = shot.getContext('2d');
+  sc.fillStyle = '#3d8fd6';
+  sc.fillRect(0, 0, 320, 240);
+
+  // el mismo orden que sigue placeImage en la app
+  const before = docState(doc);
+  doc.resize(Math.max(doc.width, 320), Math.max(doc.height, 240), 'keep');
+  const pasted = doc.addLayer(doc.layers.length, 'Pasted');
+  pasted.ctx.drawImage(shot, 0, 0);
+  pasted.rev++;
+  history.push(layersEntry(doc, before, docState(doc), 'place image'));
+
+  ok('pegar agranda el lienzo hasta la imagen',
+    doc.width === 320 && doc.height === 240, `${doc.width}x${doc.height}`);
+  ok('pegar deja la imagen en una capa nueva', doc.layers.length === 2);
+  ok('la esquina lejana de la captura entra en el lienzo', px(pasted, 310, 230).a === 255);
+
+  history.undo();
+  ok('undo del pegado saca la capa', doc.layers.length === 1);
+  ok('undo del pegado devuelve el lienzo a su tamano',
+    doc.width === 200 && doc.height === 150, `${doc.width}x${doc.height}`);
+
+  history.redo();
+  ok('redo del pegado vuelve a agrandar el lienzo',
+    doc.width === 320 && doc.height === 240, `${doc.width}x${doc.height}`);
+  ok('redo devuelve la imagen entera, sin recorte del lienzo chico',
+    px(doc.layers[1], 310, 230).a === 255,
+    `alpha en 310,230 = ${px(doc.layers[1], 310, 230).a}`);
+}
+
 // ── corrida ─────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -335,6 +381,7 @@ async function run() {
     ['capas', testLayers],
     ['guardar / abrir', testRoundTrip],
     ['presupuesto del historial', testHistoryBudget],
+    ['pegar una captura grande', testPasteGrowsCanvas],
   ];
 
   for (const [name, fn] of suites) {
