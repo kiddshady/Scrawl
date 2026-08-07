@@ -16,6 +16,7 @@ import {
   History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState,
 } from '../engine/history.js';
 import { floodFill } from '../engine/fill.js';
+import { buildPDF } from '../engine/pdf.js';
 
 const results = [];
 
@@ -368,6 +369,108 @@ function testPasteGrowsCanvas() {
     `alpha en 310,230 = ${px(doc.layers[1], 310, 230).a}`);
 }
 
+// ── 11. exportar a PDF ──────────────────────────────────────────────────────
+
+/* Un PDF mal armado no se nota mirando: el archivo pesa lo que tiene que pesar y
+ * recien no abre en el visor del otro. Asi que se verifican las dos cosas que lo
+ * romperian en silencio — que las posiciones de la tabla xref caigan justo en su
+ * objeto, y que los pixeles sobrevivan al filtro Up y a DEFLATE. */
+
+const latin1 = new TextDecoder('latin1');
+
+// deshace el filtro PNG "Up" que aplica pdf.js antes de comprimir
+function unpredict(filtered, width, height, channels) {
+  const stride = width * channels;
+  const out = new Uint8Array(stride * height);
+  for (let y = 0; y < height; y++) {
+    const row = y * (stride + 1);
+    for (let i = 0; i < stride; i++) {
+      const up = y ? out[(y - 1) * stride + i] : 0;
+      out[y * stride + i] = (filtered[row + 1 + i] + up) & 0xff;
+    }
+  }
+  return out;
+}
+
+async function streamOf(bytes, text, num, width, height, channels) {
+  const at = text.indexOf(`\n${num} 0 obj`) + 1;
+  const len = Number(text.slice(at).match(/\/Length (\d+)/)[1]);
+  const start = text.indexOf('stream\n', at) + 'stream\n'.length;
+  const raw = bytes.subarray(start, start + len);
+  const s = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate'));
+  const filtered = new Uint8Array(await new Response(s).arrayBuffer());
+  return unpredict(filtered, width, height, channels);
+}
+
+function pdfOf(doc) {
+  const flat = doc.render();
+  return flat.getContext('2d').getImageData(0, 0, flat.width, flat.height);
+}
+
+async function testPDF() {
+  const doc = new ScrawlDoc(60, 40);
+  const c = doc.active.ctx;
+  c.fillStyle = '#ff0000';
+  c.fillRect(0, 0, 60, 40);
+  c.fillStyle = '#00a0ff';
+  c.fillRect(10, 10, 20, 15);
+
+  const src = pdfOf(doc);
+  const bytes = await buildPDF(src);
+  const text = latin1.decode(bytes);
+
+  ok('el PDF arranca con la firma', text.startsWith('%PDF-'));
+  ok('el PDF cierra con %%EOF', text.trimEnd().endsWith('%%EOF'));
+
+  const sx = Number(text.match(/startxref\s+(\d+)/)[1]);
+  ok('startxref cae justo en la tabla', text.startsWith('xref', sx), `offset ${sx}`);
+
+  const rows = text.slice(sx).match(/^\d{10} 00000 n $/gm) || [];
+  const alineados = rows.filter(
+    (r, i) => text.startsWith(`${i + 1} 0 obj`, Number(r.slice(0, 10))),
+  ).length;
+  ok('cada offset de la xref cae en su objeto',
+    rows.length >= 6 && alineados === rows.length, `${alineados}/${rows.length}`);
+
+  const box = text.match(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/);
+  ok('la pagina mide la imagen a 96 DPI',
+    Number(box[1]) === 45 && Number(box[2]) === 30, `${box[1]}x${box[2]}`);
+
+  ok('un dibujo opaco no arrastra mascara de alfa', !text.includes('/SMask'));
+
+  const rgb = await streamOf(bytes, text, 5, 60, 40, 3);
+  const sample = (x, y) => {
+    const i = (y * 60 + x) * 3;
+    return `${rgb[i]},${rgb[i + 1]},${rgb[i + 2]}`;
+  };
+  ok('el rojo del fondo llega intacto al PDF', sample(50, 35) === '255,0,0', sample(50, 35));
+  ok('el rectangulo azul llega intacto al PDF', sample(20, 15) === '0,160,255', sample(20, 15));
+
+  let iguales = 0;
+  for (let i = 0, p = 0; i < rgb.length; i += 3, p += 4) {
+    if (rgb[i] === src.data[p] && rgb[i + 1] === src.data[p + 1]
+      && rgb[i + 2] === src.data[p + 2]) iguales++;
+  }
+  ok('los 2400 pixeles vuelven identicos', iguales === 60 * 40, `${iguales}/2400`);
+}
+
+async function testPDFAlpha() {
+  const doc = new ScrawlDoc(40, 40);
+  const c = doc.active.ctx;
+  c.fillStyle = 'rgba(0, 255, 0, 0.5)';
+  c.fillRect(0, 0, 20, 40);          // media izquierda a medio alfa, derecha vacia
+
+  const bytes = await buildPDF(pdfOf(doc));
+  const text = latin1.decode(bytes);
+
+  ok('un dibujo con transparencia lleva /SMask', text.includes('/SMask 6 0 R'));
+
+  const mask = await streamOf(bytes, text, 6, 40, 40, 1);
+  near(mask[20 * 40 + 5], 128, 2, 'la mascara guarda el alfa del pintado');
+  ok('la mascara guarda el vacio como transparente', mask[20 * 40 + 30] === 0,
+    `alfa=${mask[20 * 40 + 30]}`);
+}
+
 // ── corrida ─────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -382,6 +485,8 @@ async function run() {
     ['guardar / abrir', testRoundTrip],
     ['presupuesto del historial', testHistoryBudget],
     ['pegar una captura grande', testPasteGrowsCanvas],
+    ['exportar PDF', testPDF],
+    ['exportar PDF con alfa', testPDFAlpha],
   ];
 
   for (const [name, fn] of suites) {

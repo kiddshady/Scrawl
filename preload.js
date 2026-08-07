@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('scrawl', {
   file: {
     exportPNG: (data, suggestedName) =>
       ipcRenderer.invoke('file:export-png', { data, suggestedName }),
+    exportPDF: (data, suggestedName) =>
+      ipcRenderer.invoke('file:export-pdf', { data, suggestedName }),
     saveDoc: (json, suggestedName, path) =>
       ipcRenderer.invoke('file:save-doc', { json, suggestedName, path }),
     openDoc: () => ipcRenderer.invoke('file:open-doc'),

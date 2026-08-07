@@ -11,7 +11,7 @@ npm start
 | --- | --- |
 | `npm start` | Abre la app |
 | `npm run dev` | Abre con DevTools |
-| `npm test` | Autotest del motor (44 aserciones, sale con código 1 si algo falla) |
+| `npm test` | Autotest del motor (56 aserciones, sale con código 1 si algo falla) |
 | `npm run shot` | Abre, dibuja trazos de muestra, guarda `.shots/ui.png` y cierra |
 | `npm run shot:puck` | Lo mismo, con el puck de navegación abierto sobre el dibujo |
 | `npm run icons` | Regenera `build/icon.png` + `.ico` desde la curva de la marca (necesita ImageMagick) |
@@ -35,6 +35,7 @@ npm start
 | `Tab` | Ocultar los paneles |
 | `Ctrl+Shift+N` `Ctrl+J` `Ctrl+E` | Capa nueva, duplicar, aplastar |
 | `Ctrl+S` `Ctrl+O` `Ctrl+Shift+E` | Guardar `.scrawl`, abrir, exportar PNG |
+| `Ctrl+Shift+P` | Exportar PDF |
 | `Ctrl+V` | Pegar una captura del portapapeles como capa nueva |
 
 Sobre un documento vacío, pegar ajusta el lienzo al tamaño exacto de la captura —
@@ -47,6 +48,13 @@ ruta del archivo que guardó. ShareX viene configurado de fábrica para lo segun
 una app que solo pide bitmap ve el portapapeles vacío justo cuando la captura está
 ahí — los chats la pegan igual porque saben leer archivos, así que el síntoma parece
 un bug de la app y no una diferencia de formato.
+
+El PDF se escribe a mano, sin librería: una página con una imagen adentro son seis
+objetos y una tabla de posiciones, y meter jsPDF sería la primera dependencia de
+runtime del proyecto para generar dos pantallas de bytes. La página mide lo que mide
+la imagen tomando los píxeles a 96 DPI — lo que se exporta es el dibujo, no el dibujo
+pegado dentro de una A4 con márgenes. Los píxeles van sin pérdida (DEFLATE sobre el
+RGB crudo, igual que un PNG) y la transparencia viaja como `/SMask`.
 
 ## Estructura
 
@@ -64,6 +72,7 @@ renderer/
     stroke.js        pointer events, presión, suavizado, curvas
     history.js       undo/redo por bounding box
     fill.js          flood fill por líneas
+    pdf.js           escritor de PDF de una página (filtro Up + DEFLATE, /SMask)
   js/ui/             icons, controls, tooltips, titlebar, color, layers, brushpanel, puck
   js/dev/selftest.js el autotest
 ```
@@ -98,6 +107,11 @@ tablet reportó. Es la razón por la que muchos canvas web se sienten baratos co
 la presión, que recomponer una región dé idéntico resultado que recomponer todo,
 borrador, flood fill, capas, el round-trip de guardado, la evicción del historial y
 que deshacer un pegado devuelva también el tamaño del lienzo.
+
+Del PDF verifica las dos cosas que lo romperían en silencio — un archivo que pesa lo
+que tiene que pesar y recién no abre en el visor del otro: que cada posición de la
+tabla xref caiga justo en su objeto, y que los píxeles vuelvan idénticos después de
+descomprimir y deshacer el filtro.
 
 `npm run shot` es la contraparte visual: abre la app, dibuja una muestra con cada
 pincel usando presión variable y guarda un PNG. Un cambio en el rasterizado se

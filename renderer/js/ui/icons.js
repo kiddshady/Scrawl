@@ -54,6 +54,8 @@ export const ICONS = {
   save: 'M5.5 4.5h10l4 4v11h-14z M8.5 4.5v5h6v-5 M8 19.5v-5h8v5',
   open: 'M3.5 6.5h5l2 2.5h9.5v10h-16.5z',
   exportImage: 'M12 15.5V3.5 M8 7.5l4-4 4 4 M4 15v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V15',
+  // hoja con esquina doblada y una flecha hacia adentro: sale un documento, no una imagen
+  exportPdf: 'M6.5 3.5h7l5 5v12h-12z M13.5 3.5v5h5 M12 10.5v6 M9.5 14l2.5 2.5 2.5-2.5',
   image: 'M3.5 4.5h17v15h-17z M8.5 11.2a1.85 1.85 0 1 0 0-3.7 1.85 1.85 0 0 0 0 3.7z M4 17l5-5 3.5 3.5 3-2.5 4.5 4',
   clipboard: 'M9 4.5H7A1.5 1.5 0 0 0 5.5 6v13A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V6A1.5 1.5 0 0 0 17 4.5h-2 M9 3h6v3.5H9z',
   clear: 'M4.5 4.5h15v15h-15z M9 9l6 6 M15 9l-6 6',

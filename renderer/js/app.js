@@ -14,6 +14,7 @@ import { Viewport } from './engine/viewport.js';
 import { Painter, BRUSHES, TOOL_SETTINGS, makeBrush, toHex } from './engine/brush.js';
 import { StrokeInput, StrokePath } from './engine/stroke.js';
 import { floodFill } from './engine/fill.js';
+import { buildPDF } from './engine/pdf.js';
 import {
   History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState, formatBytes,
 } from './engine/history.js';
@@ -509,6 +510,18 @@ async function exportPNG() {
   if (res.ok) toast(`Exported ${baseName(res.path)}`, 'exportImage');
 }
 
+/* La pagina del PDF sale del tamano de la imagen (a 96 DPI), no de una hoja A4:
+ * lo que se exporta es el dibujo, no un dibujo pegado adentro de un documento con
+ * margenes. La transparencia se conserva. */
+async function exportPDF() {
+  const flat = doc.render();
+  const px = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height);
+  const bytes = await buildPDF(px);
+  const name = (docPath ? baseName(docPath) : 'scrawl') + '.pdf';
+  const res = await window.scrawl.file.exportPDF(bytes, name);
+  if (res.ok) toast(`Exported ${baseName(res.path)}`, 'exportPdf');
+}
+
 async function copyToClipboard() {
   const flat = doc.render();
   const blob = await new Promise((r) => flat.toBlob(r, 'image/png'));
@@ -669,7 +682,7 @@ async function importImage() {
 
 function baseName(p) {
   const f = String(p).split(/[\\/]/).pop();
-  return f.replace(/\.(scrawl|png|jpe?g|webp|bmp|gif)$/i, '');
+  return f.replace(/\.(scrawl|png|jpe?g|webp|bmp|gif|pdf)$/i, '');
 }
 
 // ── undo / redo ─────────────────────────────────────────────────────────────
@@ -802,6 +815,9 @@ function onKeyDown(e) {
       case 'n': e.preventDefault(); e.shiftKey ? addLayer() : newDoc(); return;
       case 'j': e.preventDefault(); duplicateLayer(); return;
       case 'e': e.preventDefault(); e.shiftKey ? exportPNG() : mergeDown(); return;
+      // Ctrl+P a secas queda libre a proposito: es el reflejo de imprimir, y esto
+      // no imprime. El PDF va con Shift, en la misma familia que el PNG.
+      case 'p': if (e.shiftKey) { e.preventDefault(); exportPDF(); } return;
       case 'v': e.preventDefault(); pasteImage(); return;
       case 'c': e.preventDefault(); copyToClipboard(); return;
       case '0': e.preventDefault(); fitView(); return;
@@ -946,6 +962,7 @@ initTitlebar({
       { label: 'Paste from Clipboard', action: 'paste', key: 'Ctrl+V', icon: 'clipboard' },
       { rule: true },
       { label: 'Export PNG…', action: 'exportPNG', key: 'Ctrl+Shift+E', icon: 'exportImage' },
+      { label: 'Export PDF…', action: 'exportPDF', key: 'Ctrl+Shift+P', icon: 'exportPdf' },
       { label: 'Copy to Clipboard', action: 'copyImage', key: 'Ctrl+C', icon: 'clipboard' },
     ],
     edit: [
@@ -971,7 +988,7 @@ initTitlebar({
   },
   onAction: (action) => ({
     newDoc, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
-    importImage, paste: pasteImage, exportPNG, copyImage: copyToClipboard,
+    importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard,
     undo, redo, clearLayer, addLayer, duplicateLayer, mergeDown, deleteLayer,
     zoomIn: () => { view.zoomIn(); updateZoomLabel(); invalidate(); },
     zoomOut: () => { view.zoomOut(); updateZoomLabel(); invalidate(); },

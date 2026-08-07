@@ -310,6 +310,20 @@ ipcMain.handle('file:export-png', async (_e, { data, suggestedName }) => {
   return { ok: true, path: filePath };
 });
 
+/* El PDF llega ya armado desde el renderer (ver renderer/js/engine/pdf.js): es el
+ * unico que tiene los pixeles, y el navegador trae DEFLATE de fabrica. Aca solo se
+ * elige la ruta y se escribe, igual que con el PNG. */
+ipcMain.handle('file:export-pdf', async (_e, { data, suggestedName }) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export PDF',
+    defaultPath: suggestedName || 'scrawl.pdf',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  await fs.writeFile(filePath, Buffer.from(data));
+  return { ok: true, path: filePath };
+});
+
 ipcMain.handle('file:save-doc', async (_e, { json, suggestedName, path: known }) => {
   let filePath = known || null;
   if (!filePath) {
