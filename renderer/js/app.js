@@ -156,11 +156,12 @@ function hint(text) {
 function updateCanvasCursor() {
   const t = effectiveTool();
   if (t === 'pan') {
-    /* Con el puck arriba el cursor dice cual de los dos gestos va a salir si
-     * apoyas aca: la doble flecha vertical del nucleo es la unica pista de que
-     * el zoom se arrastra hacia arriba y hacia abajo. */
+    /* Sobre el nucleo el cursor se apaga: el puck ya ilumina la zona que esta
+     * bajo el puntero, asi que la flecha del sistema no agrega ubicacion y de
+     * paso tapa la lupa, que es lo que dice que ahi se hace zoom. En el anillo
+     * el cursor si trabaja — ahi la mano es toda la senal de que se desplaza. */
     const overCore = zooming || (!panning && hoverPt && puck.zoneAt(hoverPt.x, hoverPt.y) === 'core');
-    canvas.style.cursor = overCore ? 'ns-resize' : panning ? 'grabbing' : 'grab';
+    canvas.style.cursor = overCore ? 'none' : panning ? 'grabbing' : 'grab';
   } else if (t === 'picker') canvas.style.cursor = 'crosshair';
   else if (t === 'fill') canvas.style.cursor = 'crosshair';
   else canvas.style.cursor = 'none';
