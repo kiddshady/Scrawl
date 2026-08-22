@@ -95,10 +95,23 @@ reinicio de sorpresa. Clickeándola aparecen las notas del release y el botón p
 bajarla; una vez bajada se aplica al reiniciar, o sola la próxima vez que cierres
 la app. Con un dibujo sin guardar, el diálogo lo dice y ofrece guardar primero.
 
-Publicar una versión es `npm version <x.y.z>` y `npm run release` con `GH_TOKEN`
-en el entorno. Eso sube los dos ejecutables **y el `latest.yml`**, que es el
-archivo que el updater consulta: sin él, las apps instaladas no ven la versión
-nueva por más que el release exista.
+Publicar una versión es `npm version <x.y.z>`, empujar el tag, y `npm run release`
+con `GH_TOKEN` en el entorno. Eso sube los dos ejecutables **y el `latest.yml`**,
+que es el archivo que el updater consulta: sin él, las apps instaladas no ven la
+versión nueva por más que el release exista.
+
+Conviene crear el release vacío **antes** de publicar:
+
+```bash
+gh release create v0.4.0 --draft --title "Scrawl 0.4.0 — lo que trae"
+```
+
+No es ceremonia: electron-builder publica un target a la vez y los dos corren a
+crear el release, así que sobre el mismo tag pueden quedar dos — uno con los
+ejecutables y un borrador suelto con el `.blockmap` adentro. Ese blockmap es lo
+que deja bajar solo los pedazos que cambiaron en vez de los 90 MB enteros, así
+que perderlo no rompe la actualización, solo la encarece, y por eso se pierde
+sin que nadie lo note. Con el release ya existente, los dos targets suben ahí.
 
 Dos límites que conviene tener presentes:
 
