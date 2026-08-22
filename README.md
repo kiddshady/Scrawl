@@ -45,10 +45,15 @@ npm start
 
 ## Tamaño de impresión
 
+**La app abre en A4 vertical a 300 DPI**, o sea 2480×3508. El default es imprimible
+a propósito: un lienzo de pantalla obliga a acordarse de cambiarlo *antes* de
+dibujar, y el que se olvida se entera al final, que es el peor momento posible. Al
+revés no pasa nada — si lo que estabas haciendo no era para papel, el tamaño de más
+no molesta.
+
 `Ctrl+Alt+C` abre el diálogo de tamaño de lienzo: papel (A3 a A6, B5, Letter, Legal,
 Tabloid), orientación, densidad y qué pasa con lo que ya está dibujado — dónde queda
-anclado, o si se escala para entrar entero. Elegir A4 a 300 DPI deja el lienzo en
-2480×3508, que es lo que da cualquier otra herramienta.
+anclado, o si se escala para entrar entero.
 
 Lo que hace que la promesa se cumpla no son los píxeles sino los **DPI, que viajan
 con el documento**. Un lienzo son dos números: los milímetros de la hoja y cuántos
@@ -58,18 +63,23 @@ habría que reescalarla en el diálogo de impresión, que es justo lo que esto e
 para evitar. Con el papel declarado, la página del PDF sale de la hoja exacta
 (595.28 × 841.89 pt para una A4) y no del redondeo de los píxeles.
 
-Con tamaño de impresión puesto, el lienzo deja de moverse solo: pegar una captura ya
-no lo redimensiona, la imagen entra escalada sobre la hoja. Y `Ctrl+N` hereda la
-medida, porque quien se armó una A4 quiere la siguiente hoja igual.
-
 Achicar el lienzo recorta, pero `Ctrl+Z` devuelve hasta el último píxel: el paso de
 historial se queda con los canvas que el redimensionado descartó, así que no cuesta
-una sola copia.
+una sola copia. Y `Ctrl+N` hereda la medida, porque quien se armó una A4 quiere la
+siguiente hoja igual.
 
-Sobre un documento vacío y sin tamaño de impresión, pegar ajusta el lienzo al tamaño
-exacto de la captura — anotar una captura tiene que exportar esa captura, no la
-captura flotando en un lienzo de otra medida. Con algo ya dibujado el lienzo solo
-crece, lo justo para que la imagen entre sin recortarse, y la imagen cae centrada.
+**El pegado sigue mandando sobre el lienzo, esté en A4 o no.** Sobre un documento
+intacto, pegar lo ajusta al tamaño exacto de la captura — anotar una captura tiene
+que exportar esa captura, no la captura flotando en un lienzo de otra medida — y con
+algo ya dibujado el lienzo solo crece, lo justo para que la imagen entre sin
+recortarse. La imagen entra siempre a tamaño natural; el lienzo se acomoda a ella y
+no al revés.
+
+Lo que sí se cae en ese momento es la etiqueta del papel: un lienzo que mide
+1920×1080 dejó de ser una A4, y seguir diciéndolo haría que el PDF saliera con una
+página A4 estirando el dibujo para llegar. Cuando el lienzo pasa a ser exactamente la
+imagen, el documento vuelve además a los 96 DPI de pantalla, que es con los que se
+midió la captura. Deshacer devuelve las dos cosas junto con los píxeles.
 
 Pegar acepta las dos formas en que un capturador deja una captura: los píxeles, o la
 ruta del archivo que guardó. ShareX viene configurado de fábrica para lo segundo, y

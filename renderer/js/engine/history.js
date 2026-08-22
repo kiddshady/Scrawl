@@ -156,6 +156,13 @@ export function layersEntry(doc, before, after, label = 'layers') {
      * que rehacer devuelva la imagen completa aunque deshacer haya encogido el
      * lienzo por debajo de ella. */
     if (doc.width !== s.width || doc.height !== s.height) doc.resize(s.width, s.height);
+    /* La densidad y el papel se restauran junto con el tamano porque el pegado
+     * los cambia: una captura pegada en un documento intacto lo convierte en un
+     * documento de pantalla, y deja de ser la hoja que era. Sin esto, deshacer
+     * devolveria los pixeles del lienzo pero no lo que miden en papel — el
+     * lienzo volveria a 2480x3508 sin volver a ser una A4. */
+    doc.dpi = s.dpi;
+    doc.paper = s.paper;
     doc.invalidateBelow();
   };
   return {
@@ -223,9 +230,12 @@ export function docState(doc) {
     activeIndex: doc.activeIndex,
     /* El tamano del lienzo es parte del estado estructural porque pegar una
      * imagen mas grande lo agranda. Sin esto, deshacer un pegado sacaria la capa
-     * y dejaria el lienzo estirado, sin forma de volver. */
+     * y dejaria el lienzo estirado, sin forma de volver. La densidad y el papel
+     * van con el: son la otra mitad de esa medida. */
     width: doc.width,
     height: doc.height,
+    dpi: doc.dpi,
+    paper: doc.paper,
     props: doc.layers.map((l) => [l, {
       opacity: l.opacity, visible: l.visible, blend: l.blend, name: l.name,
     }]),

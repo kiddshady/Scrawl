@@ -15,7 +15,7 @@ import { Painter, BRUSHES, TOOL_SETTINGS, makeBrush, toHex } from './engine/brus
 import { StrokeInput, StrokePath } from './engine/stroke.js';
 import { floodFill } from './engine/fill.js';
 import { buildPDF } from './engine/pdf.js';
-import { matchPaper, paperMm, formatMm } from './engine/paper.js';
+import { matchPaper, paperMm, paperPixels, formatMm } from './engine/paper.js';
 import {
   History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState,
   canvasEntry, canvasState, formatBytes,
@@ -42,7 +42,22 @@ const ZOOM_DRAG_PX = 180;
 
 // ── estado ──────────────────────────────────────────────────────────────────
 
-const doc = new ScrawlDoc(1920, 1200);
+/* Con lo que abre la app: una A4 vertical a 300 DPI, o sea 2480x3508.
+ *
+ * La decision es que el default sea imprimible. Un lienzo de pantalla obliga a
+ * acordarse de cambiarlo ANTES de dibujar, y el que se olvida se entera al final,
+ * que es el peor momento posible. Al reves no pasa nada: si lo que estabas
+ * haciendo no era para papel, el tamano de mas no molesta.
+ *
+ * Cuesta memoria — cuatro veces la del lienzo de pantalla que habia antes — pero
+ * no velocidad: recomponer trabaja por region, asi que lo que cuesta un trazo
+ * depende del trazo y no del tamano del documento. */
+const DEFAULT_PAPER = { id: 'a4', orientation: 'portrait' };
+const DEFAULT_DPI = 300;
+
+const startSize = paperPixels(DEFAULT_PAPER.id, DEFAULT_PAPER.orientation, DEFAULT_DPI);
+const doc = new ScrawlDoc(startSize.w, startSize.h, DEFAULT_DPI);
+doc.paper = { ...DEFAULT_PAPER };
 const canvas = q('sc-canvas');
 const view = new Viewport(canvas, doc);
 const painter = new Painter(doc);
@@ -676,17 +691,19 @@ function pristineDoc() {
  *
  * El lienzo se acomoda a la imagen segun en que estado este el documento:
  *
- *   con tamano de impresion  el lienzo NO se toca. La hoja es todo el punto: si
- *            pegar una captura convirtiera la A4 en un lienzo de 1920x1080, el
- *            documento dejaria de ser lo que uno preparo para imprimir. La
- *            imagen entra escalada si no cabe.
- *   intacto  el lienzo pasa a medir EXACTAMENTE la imagen. Pegar una captura de
- *            1920x1080 en el lienzo por defecto de 1920x1200 dejaba una banda
- *            transparente de 120px abajo que despues se colaba en el PNG
- *            exportado — anotar una captura tiene que dar esa captura, no la
- *            captura flotando en un lienzo de otra medida.
+ *   intacto  el lienzo pasa a medir EXACTAMENTE la imagen. Anotar una captura
+ *            tiene que dar esa captura, no la captura flotando en un lienzo de
+ *            otra medida: cualquier banda transparente que sobre se cuela en el
+ *            PNG exportado.
  *   con algo dibujado  solo crece, y solo lo necesario para que la imagen entre
- *            sin recortarse. Achicar aca borraria pixeles del dibujo. */
+ *            sin recortarse. Achicar aca borraria pixeles del dibujo.
+ *
+ * La imagen entra SIEMPRE a tamano natural: el lienzo se acomoda a ella y no al
+ * reves. Que la app abra en A4 no cambia nada de esto — un documento recien
+ * abierto es una hoja que todavia no es nada, y pegar ahi lo convierte en la
+ * captura. Lo que si se cae en ese momento es la etiqueta del papel, porque un
+ * lienzo que mide 1920x1080 dejo de ser una A4 y seguir diciendolo haria que el
+ * PDF saliera con una pagina A4 estirando el dibujo para llegar. */
 async function placeImage(src, label) {
   const img = await loadImage(src);
   /* La foto del estado va ANTES de tocar el lienzo: el tamano forma parte de lo
@@ -694,14 +711,18 @@ async function placeImage(src, label) {
    * sacara la capa y dejara el lienzo agrandado para siempre. */
   const before = docState(doc);
 
-  const printed = !!doc.paper;
-  const fit = printed
-    ? { w: doc.width, h: doc.height }
-    : pristineDoc()
-      ? { w: img.width, h: img.height }
-      : { w: Math.max(doc.width, img.width), h: Math.max(doc.height, img.height) };
+  const fit = pristineDoc()
+    ? { w: img.width, h: img.height }
+    : { w: Math.max(doc.width, img.width), h: Math.max(doc.height, img.height) };
 
   if (fit.w !== doc.width || fit.h !== doc.height) {
+    /* El lienzo dejo de medir la hoja, asi que ya no es esa hoja. Y cuando pasa
+     * a ser EXACTAMENTE la imagen, el documento es esa imagen: vuelve tambien a
+     * la densidad de pantalla, que es con la que se midio la captura. Sin eso,
+     * una captura anotada saldria impresa a un tercio de su tamano. */
+    doc.paper = null;
+    if (fit.w === img.width && fit.h === img.height) doc.dpi = 96;
+
     doc.resize(fit.w, fit.h, 'keep');
     painter.syncSize();
     updateStatusSize();
@@ -709,30 +730,21 @@ async function placeImage(src, label) {
     updateZoomLabel();
   }
 
-  /* Escala solo cuando la hoja manda y la imagen no entra. En los otros dos
-   * caminos el lienzo ya se acomodo a la imagen, asi que k queda en 1 y esto es
-   * un drawImage a tamano natural. */
-  const k = printed ? Math.min(1, doc.width / img.width, doc.height / img.height) : 1;
-  const iw = Math.round(img.width * k);
-  const ih = Math.round(img.height * k);
-
   /* Centrada en lo que sobre del lienzo. Cuando el lienzo calzo con la imagen no
    * sobra nada y esto da 0,0; los dos casos salen de la misma cuenta. Nunca es
-   * negativo: para llegar aca la imagen ya entra en el lienzo. */
-  const dx = Math.round((doc.width - iw) / 2);
-  const dy = Math.round((doc.height - ih) / 2);
+   * negativo: para llegar aca el lienzo ya contiene a la imagen. */
+  const dx = Math.round((doc.width - img.width) / 2);
+  const dy = Math.round((doc.height - img.height) / 2);
 
   const layer = doc.addLayer(doc.layers.length, label);
-  layer.ctx.imageSmoothingQuality = 'high';
-  layer.ctx.drawImage(img, dx, dy, iw, ih);
+  layer.ctx.drawImage(img, dx, dy);
   layer.rev++;
   history.push(layersEntry(doc, before, docState(doc), 'place image'));
   layersPanel.markEntering(layer.id);
   markDirty(true);
   refreshAll();
-  // el tamano con el que QUEDO colocada, que es el que el aviso tiene que decir:
-  // sobre una hoja puede no ser el que traia el archivo
-  return { w: iw, h: ih };
+  // el tamano lo reporta quien decodifico: es el unico que lo sabe de verdad
+  return { w: img.width, h: img.height };
 }
 
 async function pasteImage() {

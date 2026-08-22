@@ -346,7 +346,8 @@ function testHistoryBudget() {
  * Y como encoger el lienzo recorta las capas, el redo tiene que devolver la
  * imagen ENTERA, no la parte que entraba en el lienzo chico. */
 function testPasteGrowsCanvas() {
-  const doc = new ScrawlDoc(200, 150);
+  const doc = new ScrawlDoc(200, 150, 300);
+  doc.paper = { id: 'a4', orientation: 'portrait' };
   const history = new History();
 
   const shot = document.createElement('canvas');
@@ -358,6 +359,10 @@ function testPasteGrowsCanvas() {
 
   // el mismo orden que sigue placeImage en la app
   const before = docState(doc);
+  /* Adoptar la captura deja al documento midiendo pixeles de pantalla: deja de
+   * ser la hoja que era, y con ella se va la densidad de impresion. */
+  doc.paper = null;
+  doc.dpi = 96;
   doc.resize(Math.max(doc.width, 320), Math.max(doc.height, 240), 'keep');
   const pasted = doc.addLayer(doc.layers.length, 'Pasted');
   pasted.ctx.drawImage(shot, 0, 0);
@@ -373,6 +378,11 @@ function testPasteGrowsCanvas() {
   ok('undo del pegado saca la capa', doc.layers.length === 1);
   ok('undo del pegado devuelve el lienzo a su tamano',
     doc.width === 200 && doc.height === 150, `${doc.width}x${doc.height}`);
+  /* El tamano sin la densidad no alcanza: el lienzo volveria a medir lo mismo en
+   * pixeles pero otra cosa en papel, y el PDF saldria de otra hoja. */
+  ok('undo del pegado devuelve tambien la hoja y la densidad',
+    doc.dpi === 300 && doc.paper?.id === 'a4',
+    `dpi=${doc.dpi} paper=${JSON.stringify(doc.paper)}`);
 
   history.redo();
   ok('redo del pegado vuelve a agrandar el lienzo',
