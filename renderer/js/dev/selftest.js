@@ -11,9 +11,11 @@
  * no mirando y confiando. */
 
 import { ScrawlDoc, clampRect } from '../engine/doc.js';
+import { PAPERS, DPIS, paperPixels, paperMm, matchPaper, pxToMm } from '../engine/paper.js';
 import { Painter, makeBrush } from '../engine/brush.js';
 import {
   History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState,
+  canvasEntry, canvasState,
 } from '../engine/history.js';
 import { floodFill } from '../engine/fill.js';
 import { buildPDF } from '../engine/pdf.js';
@@ -279,7 +281,8 @@ function testLayers() {
 // ── 8. guardar y abrir ──────────────────────────────────────────────────────
 
 async function testRoundTrip() {
-  const doc = new ScrawlDoc(90, 70);
+  const doc = new ScrawlDoc(90, 70, 300);
+  doc.paper = { id: 'a4', orientation: 'landscape' };
   doc.active.ctx.fillStyle = '#3d8fd6';
   doc.active.ctx.fillRect(10, 10, 40, 30);
   const l2 = doc.addLayer(1, 'Segunda');
@@ -293,6 +296,16 @@ async function testRoundTrip() {
   const back = await ScrawlDoc.fromJSON(json);
 
   ok('el round trip conserva el tamano', back.width === 90 && back.height === 70);
+  /* La densidad y el papel se guardan porque son la mitad de la medida: un
+   * archivo que vuelve con los pixeles pero sin sus DPI se abre midiendo otra
+   * cosa en papel, y el PDF que salga de el ya no es la hoja que era. */
+  ok('el round trip conserva la densidad', back.dpi === 300, `dpi=${back.dpi}`);
+  ok('el round trip conserva el papel',
+    back.paper?.id === 'a4' && back.paper?.orientation === 'landscape',
+    JSON.stringify(back.paper));
+  const old = await ScrawlDoc.fromJSON({ width: 20, height: 20, layers: [] });
+  ok('un archivo viejo sin densidad se abre a 96 DPI', old.dpi === 96 && old.paper === null,
+    `dpi=${old.dpi} paper=${JSON.stringify(old.paper)}`);
   ok('el round trip conserva la cantidad de capas', back.layers.length === 2);
   ok('el round trip conserva el nombre', back.layers[1].name === 'Segunda');
   near(back.layers[1].opacity, 0.42, 0.001, 'el round trip conserva la opacidad');
@@ -471,6 +484,155 @@ async function testPDFAlpha() {
     `alfa=${mask[20 * 40 + 30]}`);
 }
 
+// ── 13. tamanos de papel ────────────────────────────────────────────────────
+
+/* La aritmetica del papel es la clase de cosa que sale mal por un pixel y no se
+ * nota hasta que la hoja impresa no cierra. Se verifica contra los numeros
+ * publicados — 2480x3508 es lo que da cualquier otra herramienta para una A4 a
+ * 300 — y se comprueba que el reconocimiento cierre el circulo: lo que este
+ * modulo genera, este modulo lo tiene que volver a llamar por su nombre. */
+function testPaper() {
+  const a4 = paperPixels('a4', 'portrait', 300);
+  ok('A4 a 300 DPI da 2480x3508', a4.w === 2480 && a4.h === 3508, `${a4.w}x${a4.h}`);
+
+  const land = paperPixels('a4', 'landscape', 300);
+  ok('el horizontal da vuelta la hoja', land.w === 3508 && land.h === 2480, `${land.w}x${land.h}`);
+
+  const letter = paperPixels('letter', 'portrait', 300);
+  ok('Letter sale exacta de sus 8.5x11 pulgadas',
+    letter.w === 2550 && letter.h === 3300, `${letter.w}x${letter.h}`);
+
+  const back = matchPaper(2480, 3508, 300);
+  ok('un lienzo A4 se reconoce como A4',
+    back?.id === 'a4' && back?.orientation === 'portrait', JSON.stringify(back));
+
+  // los mismos pixeles a otra densidad son otra medida fisica, y ya no son A4
+  ok('el reconocimiento mira la densidad', !matchPaper(2480, 3508, 96));
+  ok('una medida libre no se hace pasar por papel', !matchPaper(1920, 1200, 96));
+
+  let round = 0;
+  for (const p of PAPERS) {
+    for (const o of ['portrait', 'landscape']) {
+      for (const d of DPIS) {
+        const px = paperPixels(p.id, o, d);
+        const m = matchPaper(px.w, px.h, d);
+        if (m && m.id === p.id && m.orientation === o) round++;
+      }
+    }
+  }
+  const total = PAPERS.length * 2 * DPIS.length;
+  ok('cada papel se reconoce en toda orientacion y densidad', round === total, `${round}/${total}`);
+
+  near(pxToMm(2480, 300), 210, 0.05, 'volver a milimetros da la hoja de nuevo');
+}
+
+// ── 14. redimensionar el lienzo ─────────────────────────────────────────────
+
+/* Lo que se rompe en silencio aca es el camino de vuelta. Achicar el lienzo
+ * RECORTA las capas, y con la entrada de historial equivocada — la que restaura
+ * el tamano llamando de nuevo a resize() — deshacer devuelve un lienzo grande
+ * con el dibujo ya mutilado: el tamano vuelve, los pixeles no. Por eso el paso
+ * se guarda quedandose con los canvas viejos, y por eso esto lo verifica
+ * mirando un pixel que solo existe si nunca se perdio. */
+function testCanvasResize() {
+  const doc = new ScrawlDoc(200, 100);
+  const history = new History();
+  const c = doc.active.ctx;
+  c.fillStyle = '#ff0000';
+  c.fillRect(0, 0, 200, 100);
+  c.fillStyle = '#00ff00';
+  c.fillRect(190, 90, 10, 10);          // marca en la esquina inferior derecha
+
+  let before = canvasState(doc);
+  doc.resize(400, 300, 'c');
+  history.push(canvasEntry(doc, before, canvasState(doc)));
+
+  ok('el lienzo crece', doc.width === 400 && doc.height === 300, `${doc.width}x${doc.height}`);
+  ok('los buffers acompanan al tamano nuevo',
+    doc.flat.width === 400 && doc.below.height === 300,
+    `flat=${doc.flat.width} below=${doc.below.height}`);
+  ok('anclado al centro, el contenido queda centrado', px(doc.active, 100, 100).r === 255);
+  ok('lo que se agrego queda vacio', px(doc.active, 40, 40).a === 0);
+
+  before = canvasState(doc);
+  doc.resize(120, 80, 'nw');
+  history.push(canvasEntry(doc, before, canvasState(doc)));
+  ok('el lienzo se achica', doc.width === 120 && doc.height === 80, `${doc.width}x${doc.height}`);
+
+  history.undo();
+  ok('undo devuelve el tamano de antes del recorte',
+    doc.width === 400 && doc.height === 300, `${doc.width}x${doc.height}`);
+  ok('undo devuelve los pixeles que el recorte tiro',
+    px(doc.active, 295, 195).g === 255, `verde=${px(doc.active, 295, 195).g}`);
+  ok('undo tambien devuelve los buffers', doc.flat.width === 400);
+
+  history.redo();
+  ok('redo vuelve a recortar', doc.width === 120 && doc.height === 80);
+
+  // la densidad y el papel son parte del paso, no solo los pixeles
+  const d2 = new ScrawlDoc(100, 100, 96);
+  const h2 = new History();
+  const st = canvasState(d2);
+  d2.dpi = 300;
+  d2.paper = { id: 'a4', orientation: 'portrait' };
+  d2.resize(2480, 3508, 'c');
+  h2.push(canvasEntry(d2, st, canvasState(d2)));
+  h2.undo();
+  ok('undo devuelve tambien la densidad y el papel',
+    d2.dpi === 96 && d2.paper === null && d2.width === 100, `dpi=${d2.dpi}`);
+}
+
+/* Escalar al cambiar de medida: el dibujo entra entero en vez de recortarse. */
+function testCanvasScale() {
+  const doc = new ScrawlDoc(200, 100);
+  doc.active.ctx.fillStyle = '#ff0000';
+  doc.active.ctx.fillRect(0, 0, 200, 100);
+
+  // de 200x100 a 100x100: entra al 50%, o sea 100x50 centrado en vertical
+  doc.resize(100, 100, 'c', true);
+  ok('el escalado mete el dibujo entero', px(doc.active, 50, 50).r === 255);
+  ok('el escalado deja vacio lo que sobra de la otra medida',
+    px(doc.active, 50, 5).a === 0, `alpha=${px(doc.active, 50, 5).a}`);
+  ok('el escalado no recorta por los lados', px(doc.active, 2, 50).r === 255);
+}
+
+// ── 15. el PDF sale del tamano de la hoja ───────────────────────────────────
+
+/* El punto entero de tener densidad en el documento: que el PDF mida en papel lo
+ * que uno preparo. Sin esto, una A4 a 300 DPI sale como una pagina de 2480 pt —
+ * 87 cm de ancho — y hay que reescalarla al imprimir. */
+async function testPrintPDF() {
+  const doc = new ScrawlDoc(60, 40, 300);
+  doc.active.ctx.fillStyle = '#ffffff';
+  doc.active.ctx.fillRect(0, 0, 60, 40);
+
+  const box = async (opts) => {
+    const text = latin1.decode(await buildPDF(pdfOf(doc), opts));
+    const m = text.match(/\/MediaBox \[0 0 ([\d.]+) ([\d.]+)\]/);
+    return [Number(m[1]), Number(m[2])];
+  };
+
+  const at300 = await box({ dpi: 300 });
+  ok('a 300 DPI la pagina mide los pixeles en pulgadas de verdad',
+    at300[0] === 14.4 && at300[1] === 9.6, `${at300[0]}x${at300[1]}`);
+
+  const at96 = await box({ dpi: 96 });
+  ok('a 96 DPI la pagina sigue saliendo del tamano de pantalla',
+    at96[0] === 45 && at96[1] === 30, `${at96[0]}x${at96[1]}`);
+
+  /* Con la hoja declarada, la pagina es la hoja EXACTA y no el redondeo de los
+   * pixeles: 595.28 pt son los 210 mm de la norma, contra los 595.2 que darian
+   * 2480 px. Es la diferencia entre que el visor anuncie A4 y que anuncie una
+   * medida personalizada. */
+  const a4 = await box({ dpi: 300, pageMm: paperMm('a4', 'portrait') });
+  ok('con papel declarado la pagina es la hoja exacta',
+    a4[0] === 595.28 && a4[1] === 841.89, `${a4[0]}x${a4[1]}`);
+
+  const a4land = await box({ dpi: 300, pageMm: paperMm('a4', 'landscape') });
+  ok('el horizontal sale acostado', a4land[0] === 841.89 && a4land[1] === 595.28,
+    `${a4land[0]}x${a4land[1]}`);
+}
+
 // ── corrida ─────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -487,6 +649,10 @@ async function run() {
     ['pegar una captura grande', testPasteGrowsCanvas],
     ['exportar PDF', testPDF],
     ['exportar PDF con alfa', testPDFAlpha],
+    ['tamanos de papel', testPaper],
+    ['redimensionar el lienzo', testCanvasResize],
+    ['escalar al redimensionar', testCanvasScale],
+    ['PDF con tamano de hoja', testPrintPDF],
   ];
 
   for (const [name, fn] of suites) {

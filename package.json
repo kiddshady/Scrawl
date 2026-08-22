@@ -12,12 +12,15 @@
     "test": "electron . --selftest",
     "shot": "electron . --ui-shot=.shots/ui.png:demo",
     "shot:puck": "electron . --ui-shot=.shots/puck.png:puck",
+    "shot:canvas": "electron . --ui-shot=.shots/canvassize.png:canvas",
+    "shot:update": "electron . --ui-shot=.shots/update.png:update --fake-update=available",
     "icons": "electron build/make-icon.js && magick build/icon.png -define icon:auto-resize=256,128,64,48,32,16 build/icon.ico",
-    "build": "electron-builder --win --publish never"
+    "build": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always"
   },
   "devDependencies": {
-    "electron": "40.10.2",
-    "electron-builder": "^25.1.8"
+    "electron": "40.10.6",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.umbrovex.scrawl",
@@ -26,6 +29,13 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kiddshady",
+        "repo": "Scrawl"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -60,5 +70,8 @@
         "role": "Editor"
       }
     ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

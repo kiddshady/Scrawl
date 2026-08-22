@@ -39,4 +39,18 @@ contextBridge.exposeInMainWorld('scrawl', {
     readImage: () => ipcRenderer.invoke('clipboard:read-image'),
     writeImage: (data) => ipcRenderer.invoke('clipboard:write-image', { data }),
   },
+
+  update: {
+    // el estado actual, para cuando el renderer monta despues del primer chequeo
+    state: () => ipcRenderer.invoke('update:state'),
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.send('update:download'),
+    install: () => ipcRenderer.send('update:install'),
+    openPage: () => ipcRenderer.send('update:page'),
+    onState: (fn) => {
+      const handler = (_e, state) => fn(state);
+      ipcRenderer.on('update:state', handler);
+      return () => ipcRenderer.off('update:state', handler);
+    },
+  },
 });

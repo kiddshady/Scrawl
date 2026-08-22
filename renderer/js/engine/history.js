@@ -168,6 +168,54 @@ export function layersEntry(doc, before, after, label = 'layers') {
   };
 }
 
+/* Entrada de redimensionado del lienzo.
+ *
+ * doc.resize() le cambia el canvas a cada capa por uno nuevo del tamano pedido y
+ * DESCARTA el viejo. Esta entrada se limita a quedarse con esos canvas
+ * descartados: deshacer es volver a colgarlos. Por eso el paso es exacto aunque
+ * el lienzo se haya achicado — los pixeles recortados nunca se borraron, se
+ * fueron con el canvas que quedo suelto — y no cuesta una sola copia, porque los
+ * canvas ya existian y el unico cambio es que ahora alguien los sigue apuntando.
+ *
+ * Los pares son [capa, canvas] y no un arreglo por posicion: entre este paso y
+ * su undo puede haberse reordenado la lista, y la capa es la que sabe cual era
+ * su canvas. */
+export function canvasEntry(doc, before, after, label = 'canvas size') {
+  const restore = (s) => {
+    doc.width = s.width;
+    doc.height = s.height;
+    doc.dpi = s.dpi;
+    doc.paper = s.paper;
+    for (const [layer, canvas] of s.canvases) {
+      layer.canvas = canvas;
+      layer.ctx = canvas.getContext('2d', { willReadFrequently: true });
+      layer.rev++;
+    }
+    doc.rebuildBuffers();
+  };
+  return {
+    kind: 'canvas', label,
+    /* Se cobra un solo lado. El otro son los canvas que el documento esta usando
+     * ahora mismo: existirian con o sin historial, y contarlos haria que el
+     * presupuesto evictara pasos por memoria que esta entrada no retiene. */
+    bytes: before.canvases.reduce((n, [, c]) => n + c.width * c.height * 4, 0),
+    undo: () => restore(before),
+    redo: () => restore(after),
+  };
+}
+
+/* Foto del lienzo, para pasar a canvasEntry. Se toma ANTES y DESPUES del
+ * resize: en el medio los canvas cambian de objeto, que es todo el mecanismo. */
+export function canvasState(doc) {
+  return {
+    width: doc.width,
+    height: doc.height,
+    dpi: doc.dpi,
+    paper: doc.paper,
+    canvases: doc.layers.map((l) => [l, l.canvas]),
+  };
+}
+
 /* Foto del estado estructural del documento, para pasar a layersEntry. */
 export function docState(doc) {
   return {

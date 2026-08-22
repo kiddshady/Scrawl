@@ -15,11 +15,16 @@ import { Painter, BRUSHES, TOOL_SETTINGS, makeBrush, toHex } from './engine/brus
 import { StrokeInput, StrokePath } from './engine/stroke.js';
 import { floodFill } from './engine/fill.js';
 import { buildPDF } from './engine/pdf.js';
+import { matchPaper, paperMm, formatMm } from './engine/paper.js';
 import {
-  History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState, formatBytes,
+  History, pixelEntry, grab, snapshotCanvas, fullLayerEntry, layersEntry, docState,
+  canvasEntry, canvasState, formatBytes,
 } from './engine/history.js';
 import { hydrateIcons, icon } from './ui/icons.js';
 import { el, makeSelect, toast } from './ui/controls.js';
+import { modalOpen } from './ui/modal.js';
+import { openCanvasSize } from './ui/canvassize.js';
+import { initUpdate } from './ui/update.js';
 import { initTooltips } from './ui/tooltips.js';
 import { initTitlebar } from './ui/titlebar.js';
 import { initColor } from './ui/color.js';
@@ -496,8 +501,52 @@ function updateZoomLabel() {
   q('sc-zoom-val').textContent = `${Math.round(view.scale * 100)}%`;
 }
 
+/* El tamano del lienzo en la barra de estado. Cuando el documento tiene medida
+ * de papel se muestra el nombre junto a los pixeles, porque es el dato que uno
+ * quiere confirmar de reojo mientras dibuja: "sigo adentro de la A4". */
 function updateStatusSize() {
-  q('sc-st-size').textContent = `${doc.width}×${doc.height}`;
+  const paper = doc.paper ? matchPaper(doc.width, doc.height, doc.dpi) : null;
+  q('sc-st-size').textContent = paper
+    ? `${doc.width}×${doc.height} · ${paper.name}`
+    : `${doc.width}×${doc.height}`;
+  q('sc-st-canvas').setAttribute('data-tip', paper
+    ? `${paper.name} ${paper.orientation} — ${formatMm(doc.width, doc.height, doc.dpi)} at ${doc.dpi} DPI`
+    : `Canvas size — ${formatMm(doc.width, doc.height, doc.dpi)} at ${doc.dpi} DPI`);
+}
+
+// ── tamano del lienzo ───────────────────────────────────────────────────────
+
+function canvasSizeDialog() {
+  if (modalOpen()) return;
+  openCanvasSize({ doc, onApply: applyCanvasSize });
+}
+
+/* Aplica lo que devolvio el dialogo.
+ *
+ * El paso se anota con canvasEntry y no con layersEntry: layersEntry restaura el
+ * tamano llamando de vuelta a resize(), que sobre capas ya recortadas devolveria
+ * un lienzo grande con el dibujo mutilado. canvasEntry se queda con los canvas
+ * originales, asi que achicar el lienzo y deshacer devuelve hasta el ultimo
+ * pixel que quedo afuera. */
+function applyCanvasSize({ w, h, dpi, paper, anchor, scale }) {
+  const before = canvasState(doc);
+
+  doc.dpi = dpi;
+  doc.paper = paper;
+  doc.resize(w, h, anchor, scale);
+
+  history.push(canvasEntry(doc, before, canvasState(doc), 'canvas size'));
+
+  painter.syncSize();
+  updateStatusSize();
+  view.fit();
+  updateZoomLabel();
+  markDirty(true);
+  refreshAll();
+  layersPanel.refreshThumbs();
+
+  const name = paper ? matchPaper(w, h, dpi)?.name : null;
+  toast(name ? `Canvas ${name} · ${w}×${h}` : `Canvas ${w}×${h}`, 'resize');
 }
 
 // ── archivos ────────────────────────────────────────────────────────────────
@@ -511,16 +560,30 @@ async function exportPNG() {
   if (res.ok) toast(`Exported ${baseName(res.path)}`, 'exportImage');
 }
 
-/* La pagina del PDF sale del tamano de la imagen (a 96 DPI), no de una hoja A4:
- * lo que se exporta es el dibujo, no un dibujo pegado adentro de un documento con
- * margenes. La transparencia se conserva. */
+/* La pagina del PDF sale del tamano del LIENZO, no de una hoja con margenes: lo
+ * que se exporta es el dibujo, a sangre. Cuanto mide ese lienzo en papel lo dice
+ * su densidad — un lienzo comun queda a 96 DPI y sale del tamano al que lo veias
+ * al 100%; uno con tamano de impresion sale exactamente de la hoja que elegiste,
+ * y ahi imprimir es mandarlo a la impresora sin tocar nada.
+ *
+ * El papel se vuelve a medir contra los pixeles en vez de confiar en la etiqueta
+ * del documento: si por lo que sea no se corresponden, mejor una pagina del
+ * tamano real que una que dice A4 y estira el dibujo para llegar. */
 async function exportPDF() {
   const flat = doc.render();
   const px = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height);
-  const bytes = await buildPDF(px);
+  const paper = doc.paper ? matchPaper(doc.width, doc.height, doc.dpi) : null;
+  const bytes = await buildPDF(px, {
+    dpi: doc.dpi,
+    pageMm: paper ? paperMm(paper.id, paper.orientation) : null,
+  });
   const name = (docPath ? baseName(docPath) : 'scrawl') + '.pdf';
   const res = await window.scrawl.file.exportPDF(bytes, name);
-  if (res.ok) toast(`Exported ${baseName(res.path)}`, 'exportPdf');
+  if (res.ok) {
+    toast(paper
+      ? `Exported ${baseName(res.path)} · ${paper.name}`
+      : `Exported ${baseName(res.path)}`, 'exportPdf');
+  }
 }
 
 async function copyToClipboard() {
@@ -568,6 +631,8 @@ async function loadDoc(json, path) {
 function adoptDoc(next, path = null) {
   doc.width = next.width;
   doc.height = next.height;
+  doc.dpi = next.dpi;
+  doc.paper = next.paper;
   doc.layers = next.layers;
   doc.activeIndex = next.activeIndex;
   doc.flat = next.flat;
@@ -589,8 +654,11 @@ function adoptDoc(next, path = null) {
   refreshAll();
 }
 
+/* Hereda la medida del documento anterior, papel incluido: quien se armo una A4
+ * para dibujar quiere la siguiente hoja igual, no volver al lienzo de fabrica. */
 function newDoc() {
-  const fresh = new ScrawlDoc(doc.width, doc.height);
+  const fresh = new ScrawlDoc(doc.width, doc.height, doc.dpi);
+  fresh.paper = doc.paper;
   adoptDoc(fresh, null);
   toast('New drawing', 'newDoc');
 }
@@ -608,6 +676,10 @@ function pristineDoc() {
  *
  * El lienzo se acomoda a la imagen segun en que estado este el documento:
  *
+ *   con tamano de impresion  el lienzo NO se toca. La hoja es todo el punto: si
+ *            pegar una captura convirtiera la A4 en un lienzo de 1920x1080, el
+ *            documento dejaria de ser lo que uno preparo para imprimir. La
+ *            imagen entra escalada si no cabe.
  *   intacto  el lienzo pasa a medir EXACTAMENTE la imagen. Pegar una captura de
  *            1920x1080 en el lienzo por defecto de 1920x1200 dejaba una banda
  *            transparente de 120px abajo que despues se colaba en el PNG
@@ -622,9 +694,12 @@ async function placeImage(src, label) {
    * sacara la capa y dejara el lienzo agrandado para siempre. */
   const before = docState(doc);
 
-  const fit = pristineDoc()
-    ? { w: img.width, h: img.height }
-    : { w: Math.max(doc.width, img.width), h: Math.max(doc.height, img.height) };
+  const printed = !!doc.paper;
+  const fit = printed
+    ? { w: doc.width, h: doc.height }
+    : pristineDoc()
+      ? { w: img.width, h: img.height }
+      : { w: Math.max(doc.width, img.width), h: Math.max(doc.height, img.height) };
 
   if (fit.w !== doc.width || fit.h !== doc.height) {
     doc.resize(fit.w, fit.h, 'keep');
@@ -634,21 +709,30 @@ async function placeImage(src, label) {
     updateZoomLabel();
   }
 
+  /* Escala solo cuando la hoja manda y la imagen no entra. En los otros dos
+   * caminos el lienzo ya se acomodo a la imagen, asi que k queda en 1 y esto es
+   * un drawImage a tamano natural. */
+  const k = printed ? Math.min(1, doc.width / img.width, doc.height / img.height) : 1;
+  const iw = Math.round(img.width * k);
+  const ih = Math.round(img.height * k);
+
   /* Centrada en lo que sobre del lienzo. Cuando el lienzo calzo con la imagen no
    * sobra nada y esto da 0,0; los dos casos salen de la misma cuenta. Nunca es
-   * negativo: para llegar aca el lienzo ya contiene a la imagen. */
-  const dx = Math.round((doc.width - img.width) / 2);
-  const dy = Math.round((doc.height - img.height) / 2);
+   * negativo: para llegar aca la imagen ya entra en el lienzo. */
+  const dx = Math.round((doc.width - iw) / 2);
+  const dy = Math.round((doc.height - ih) / 2);
 
   const layer = doc.addLayer(doc.layers.length, label);
-  layer.ctx.drawImage(img, dx, dy);
+  layer.ctx.imageSmoothingQuality = 'high';
+  layer.ctx.drawImage(img, dx, dy, iw, ih);
   layer.rev++;
   history.push(layersEntry(doc, before, docState(doc), 'place image'));
   layersPanel.markEntering(layer.id);
   markDirty(true);
   refreshAll();
-  // el tamano lo reporta quien decodifico: es el unico que lo sabe de verdad
-  return { w: img.width, h: img.height };
+  // el tamano con el que QUEDO colocada, que es el que el aviso tiene que decir:
+  // sobre una hoja puede no ser el que traia el archivo
+  return { w: iw, h: ih };
 }
 
 async function pasteImage() {
@@ -690,14 +774,14 @@ function baseName(p) {
 
 function undo() {
   if (!history.canUndo) return;
-  const size = { w: doc.width, h: doc.height };
+  const size = { w: doc.width, h: doc.height, dpi: doc.dpi, paper: doc.paper };
   history.undo();
   afterTimeTravel(size);
 }
 
 function redo() {
   if (!history.canRedo) return;
-  const size = { w: doc.width, h: doc.height };
+  const size = { w: doc.width, h: doc.height, dpi: doc.dpi, paper: doc.paper };
   history.redo();
   afterTimeTravel(size);
 }
@@ -713,6 +797,10 @@ function afterTimeTravel(size) {
     updateStatusSize();
     view.fit();
     updateZoomLabel();
+  } else if (doc.dpi !== size.dpi || doc.paper !== size.paper) {
+    // el lienzo mide lo mismo pero ya no vale lo mismo en papel: la vista no se
+    // mueve, el dato de la barra si
+    updateStatusSize();
   }
   doc.invalidateBelow();
   doc.recompose();
@@ -777,6 +865,12 @@ function onKeyDown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
+  /* Con un dialogo abierto los atajos de la app no existen: una 'b' ahi es una
+   * letra, no el pincel, y un Ctrl+Z tendria que deshacer lo que el dialogo
+   * hizo, que todavia no hizo nada. El dialogo maneja Escape y Enter por su
+   * cuenta y no los deja llegar hasta aca. */
+  if (modalOpen()) return;
+
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
 
@@ -820,7 +914,8 @@ function onKeyDown(e) {
       // no imprime. El PDF va con Shift, en la misma familia que el PNG.
       case 'p': if (e.shiftKey) { e.preventDefault(); exportPDF(); } return;
       case 'v': e.preventDefault(); pasteImage(); return;
-      case 'c': e.preventDefault(); copyToClipboard(); return;
+      // Ctrl+Alt+C es el atajo de toda la vida para el tamano del lienzo
+      case 'c': e.preventDefault(); e.altKey ? canvasSizeDialog() : copyToClipboard(); return;
       case '0': e.preventDefault(); fitView(); return;
       case '1': e.preventDefault(); resetZoom(); return;
       default: return;
@@ -944,6 +1039,13 @@ const layersPanel = initLayers({
   },
 });
 
+/* El aviso de actualizacion necesita dos cosas de aca: si hay trabajo sin
+ * guardar — reiniciar para actualizar lo perderia — y como guardarlo. */
+const updater = initUpdate({
+  isDirty: () => dirtyDoc,
+  save: () => saveDoc(false),
+});
+
 initTitlebar({
   isEnabled: (action) => {
     if (action === 'undo') return history.canUndo;
@@ -965,6 +1067,8 @@ initTitlebar({
       { label: 'Export PNG…', action: 'exportPNG', key: 'Ctrl+Shift+E', icon: 'exportImage' },
       { label: 'Export PDF…', action: 'exportPDF', key: 'Ctrl+Shift+P', icon: 'exportPdf' },
       { label: 'Copy to Clipboard', action: 'copyImage', key: 'Ctrl+C', icon: 'clipboard' },
+      { rule: true },
+      { label: 'Check for Updates…', action: 'checkUpdates', icon: 'download' },
     ],
     edit: [
       { label: 'Undo', action: 'undo', key: 'Ctrl+Z', icon: 'undo' },
@@ -973,6 +1077,8 @@ initTitlebar({
       { label: 'Clear Layer', action: 'clearLayer', key: 'Del', icon: 'clear' },
     ],
     image: [
+      { label: 'Canvas Size…', action: 'canvasSize', key: 'Ctrl+Alt+C', icon: 'resize' },
+      { rule: true },
       { label: 'New Layer', action: 'addLayer', key: 'Ctrl+Shift+N', icon: 'plus' },
       { label: 'Duplicate Layer', action: 'duplicateLayer', key: 'Ctrl+J', icon: 'duplicate' },
       { label: 'Merge Down', action: 'mergeDown', key: 'Ctrl+E', icon: 'merge' },
@@ -990,7 +1096,9 @@ initTitlebar({
   onAction: (action) => ({
     newDoc, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
     importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard,
-    undo, redo, clearLayer, addLayer, duplicateLayer, mergeDown, deleteLayer,
+    checkUpdates: () => updater.checkNow(),
+    undo, redo, clearLayer, canvasSize: canvasSizeDialog,
+    addLayer, duplicateLayer, mergeDown, deleteLayer,
     zoomIn: () => { view.zoomIn(); updateZoomLabel(); invalidate(); },
     zoomOut: () => { view.zoomOut(); updateZoomLabel(); invalidate(); },
     fit: fitView, reset: resetZoom, togglePanels,
@@ -1094,6 +1202,7 @@ q('sc-layer-dup').addEventListener('click', duplicateLayer);
 q('sc-layer-merge').addEventListener('click', mergeDown);
 q('sc-layer-del').addEventListener('click', deleteLayer);
 q('sc-swap').addEventListener('click', () => colorPicker.swap());
+q('sc-st-canvas').addEventListener('click', canvasSizeDialog);
 
 // HUD de zoom
 q('sc-zoom-in').addEventListener('click', () => { view.zoomIn(); updateZoomLabel(); invalidate(); });
@@ -1194,6 +1303,13 @@ function boot() {
   }
 
   if (UI_MODE === 'demo' || UI_MODE === 'puck') runDemo({ puck: UI_MODE === 'puck' });
+  /* Mismo motivo que el modo puck: un dialogo modal solo existe mientras alguien
+   * lo tiene abierto, y sin esto no habria forma de mirarlo sin estar sentado
+   * frente a la app. */
+  if (UI_MODE === 'canvas') setTimeout(canvasSizeDialog, 400);
+  /* El aviso de actualizacion, igual: el main lo alimenta con un estado de
+   * mentira (--fake-update=) y aca se abre el dialogo que colgaria de el. */
+  if (UI_MODE === 'update') setTimeout(() => q('sc-update').click(), 1100);
 }
 
 /* Trazos sinteticos con presion variable. Es la forma de verificar el motor sin

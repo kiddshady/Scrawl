@@ -168,10 +168,11 @@
 
     <!-- ── statusbar ──────────────────────────────────────────────────── -->
     <footer class="sc-status">
-      <span class="sc-status__item" data-tip="Canvas size">
+      <button class="sc-status__item sc-status__item--btn" id="sc-st-canvas"
+              data-tip="Canvas size" data-key="Ctrl+Alt+C" data-tip-pos="top">
         <span data-icon="canvas" data-size="12"></span>
         <span id="sc-st-size">—</span>
-      </span>
+      </button>
       <span class="sc-status__item" data-tip="Cursor position on the canvas">
         <span data-icon="crosshair" data-size="12"></span>
         <span id="sc-st-pos">—</span>
@@ -180,6 +181,12 @@
         <span data-icon="history" data-size="12"></span>
         <span id="sc-st-hist">0</span>
       </span>
+      <!-- aviso de actualizacion: aparece solo cuando hay una, con su transicion -->
+      <button class="sc-status__item sc-status__item--btn sc-update" id="sc-update"
+              data-tip="A new version is available" data-tip-pos="top" hidden>
+        <span id="sc-update-icon"></span>
+        <span id="sc-update-label">Update</span>
+      </button>
       <span class="sc-status__spacer"></span>
       <span class="sc-status__hint" id="sc-st-hint"></span>
     </footer>

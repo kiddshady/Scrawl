@@ -1,8 +1,9 @@
 'use strict';
 
 const {
-  app, BrowserWindow, ipcMain, dialog, protocol, screen, clipboard, nativeImage,
+  app, BrowserWindow, ipcMain, dialog, protocol, screen, clipboard, nativeImage, shell,
 } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs/promises');
 
@@ -83,7 +84,11 @@ const DEV = process.argv.includes('--dev');
  *         el motor de pinceles queda verificado incluso sin tablet enchufada
  *   puck  lo mismo, y ademas deja el puck de navegacion abierto sobre el dibujo:
  *         es un elemento que solo existe con una tecla apretada, y sin esto no
- *         habria forma de mirarlo sin estar sentado frente a la app */
+ *         habria forma de mirarlo sin estar sentado frente a la app
+ *   canvas  abre el dialogo de tamano del lienzo, por el mismo motivo: un modal
+ *         solo existe mientras alguien lo tiene abierto
+ *   update  abre el aviso de actualizacion; hay que darle el estado a mirar con
+ *         --fake-update=available|downloading|ready */
 /* Autotest del motor: carga selftest.html en vez de la app, deja que corra las
  * aserciones y cierra con codigo 1 si alguna fallo, para que sirva desde un
  * script o un hook de commit. */
@@ -98,6 +103,12 @@ const UI_MODE = UI_MODE_AT ? UI_MODE_AT[1] : '1';
 const UI_SHOT = UI_MODE_AT ? UI_RAW.slice(0, -UI_MODE_AT[0].length) : UI_RAW;
 // los modos que dibujan necesitan mas margen antes de disparar la captura
 const UI_DRAWS = UI_MODE === 'demo' || UI_MODE === 'puck';
+
+/* Estado de actualizacion de mentira, para revisar ese aviso sin tener que
+ * publicar un release. Solo con --dev o durante una captura: en una app
+ * instalada, la unica fuente de este estado es GitHub. */
+const FAKE_ARG = process.argv.find((a) => a.startsWith('--fake-update='));
+const FAKE_UPDATE = (DEV || UI_ARG) && FAKE_ARG ? FAKE_ARG.split('=')[1] : null;
 
 let win = null;
 
@@ -225,6 +236,21 @@ function createWindow() {
     });
   }
 
+  if (FAKE_UPDATE) {
+    /* Estado de actualizacion simulado, para poder mirar ese aviso sin esperar a
+     * que exista un release nuevo. Las notas van en HTML como las manda GitHub:
+     * asi el simulacro tambien ejercita el pasaje a texto plano. */
+    win.webContents.once('did-finish-load', () => {
+      setTimeout(() => setUpdateState(FAKE_UPDATE, {
+        version: '0.4.0',
+        notes: plainNotes('<ul><li>Canvas Size: A4, Letter &amp; friends</li>'
+          + '<li>PDF pages now match the paper exactly</li></ul>'
+          + '<p>Fixed a cursor glitch over the puck core.</p>'),
+        percent: 42,
+      }), 600);
+    });
+  }
+
   if (UI_SHOT) {
     win.webContents.once('did-finish-load', async () => {
       /* Margen para que el lienzo haya dibujado y las animaciones de entrada
@@ -274,6 +300,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     registerProtocol();
     createWindow();
+    initUpdates();
   });
 }
 
@@ -415,3 +442,144 @@ ipcMain.handle('clipboard:write-image', (_e, { data }) => {
   clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(data)));
   return { ok: true };
 });
+
+// ── actualizaciones ─────────────────────────────────────────────────────────
+
+/* Se mira el release mas nuevo de GitHub y, si hay uno, se avisa. Dos decisiones
+ * definen como se siente:
+ *
+ *   autoDownload = false — el aviso llega solo, la descarga la decide el
+ *     usuario. Bajar cien megas sin preguntar, con la conexion que tenga y
+ *     mientras dibuja, no es una cortesia.
+ *   autoInstallOnAppQuit = true — una vez descargada, si no aprieta "reiniciar"
+ *     la actualizacion se aplica cuando cierre la app por su cuenta. Nunca a
+ *     mitad de un dibujo.
+ *
+ * El portable queda afuera a proposito: corre desde una extraccion temporal y no
+ * hay instalacion que reemplazar, asi que meterle el instalador encima
+ * convertiria en instalado a alguien que eligio no estarlo. Ahi el aviso llega
+ * igual, pero lleva a la pagina del release en vez de descargar. */
+
+const RELEASES_URL = 'https://github.com/kiddshady/Scrawl/releases/latest';
+
+// el primer chequeo espera a que la app termine de montar; despues, cada tantas horas
+const UPDATE_FIRST = 10 * 1000;
+const UPDATE_EVERY = 6 * 60 * 60 * 1000;
+
+/* electron-builder le pasa esta variable al portable con la carpeta desde la que
+ * se ejecuto: es la unica forma de saber, desde adentro, cual de los dos
+ * paquetes esta corriendo. */
+const PORTABLE = !!process.env.PORTABLE_EXECUTABLE_DIR;
+
+/* Lo ultimo que se supo. Existe porque el primer chequeo puede resolverse antes
+ * de que el renderer termine de montar, y un mensaje mandado a una ventana que
+ * todavia no escucha se pierde sin dejar rastro. */
+let updateState = { status: 'idle' };
+
+function setUpdateState(status, extra = {}) {
+  updateState = { status, portable: PORTABLE, current: app.getVersion(), ...extra };
+  if (win && !win.isDestroyed()) win.webContents.send('update:state', updateState);
+}
+
+/* Las notas del release vienen como HTML desde GitHub. Se pasan a texto plano
+ * aca en vez de mandarlas al renderer: nada que llega por la red se inyecta como
+ * marcado, y el dialogo las muestra como lo que son, un texto. */
+function plainNotes(notes) {
+  const raw = Array.isArray(notes)
+    ? notes.map((n) => (typeof n === 'string' ? n : n.note || '')).join('\n\n')
+    : String(notes || '');
+  return raw
+    .replace(/<li[^>]*>/gi, '· ')
+    .replace(/<\/(p|div|li|h\d|ul|ol)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    // &amp; se decodifica al final: al reves, un "&amp;lt;" terminaria en "<"
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 1500);
+}
+
+function initUpdates() {
+  /* Sin empaquetar no hay version instalada contra la cual comparar, y los modos
+   * de verificacion son procesos efimeros que no tienen por que salir a la red. */
+  if (!app.isPackaged || SELFTEST || UI_SHOT) return;
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  // sin electron-log: lo que pasa se cuenta por consola y por el estado
+  autoUpdater.logger = null;
+
+  autoUpdater.on('update-available', (info) => {
+    setUpdateState('available', { version: info.version, notes: plainNotes(info.releaseNotes) });
+  });
+  autoUpdater.on('update-not-available', () => setUpdateState('idle'));
+  autoUpdater.on('download-progress', (p) => {
+    setUpdateState('downloading', {
+      version: updateState.version,
+      notes: updateState.notes,
+      percent: Math.max(0, Math.min(100, Math.round(p.percent))),
+    });
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdateState('ready', { version: info.version, notes: updateState.notes });
+  });
+
+  /* Un chequeo que falla no es un problema del usuario: sin internet, o con
+   * GitHub caido, esto tiene que seguir siendo una app de dibujo. Se anota, se
+   * vuelve al estado anterior y se reintenta en el proximo ciclo. */
+  autoUpdater.on('error', (err) => {
+    const message = String((err && err.message) || err);
+    console.error(`[update] ${message}`);
+    setUpdateState(updateState.status === 'downloading' ? 'available' : 'idle', {
+      version: updateState.version,
+      notes: updateState.notes,
+      error: message,
+    });
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch(() => { /* ya lo reporta 'error' */ });
+  setTimeout(check, UPDATE_FIRST);
+  setInterval(check, UPDATE_EVERY);
+}
+
+ipcMain.handle('update:state', () => ({
+  ...updateState, portable: PORTABLE, current: app.getVersion(),
+}));
+
+/* Devuelve el estado resultante, y no solo un ok. El renderer tambien lo recibe
+ * por el canal de siempre, pero ese mensaje viaja por su cuenta: quien pregunto
+ * "hay actualizacion?" tendria que decidir que contestar antes de que llegue, y
+ * ahi diria "estas al dia" justo cuando acaba de encontrar una. */
+ipcMain.handle('update:check', async () => {
+  if (!app.isPackaged) return { ok: false, reason: 'dev' };
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true, state: { ...updateState, portable: PORTABLE, current: app.getVersion() } };
+  } catch (err) {
+    return { ok: false, reason: String((err && err.message) || err) };
+  }
+});
+
+ipcMain.on('update:download', () => {
+  if (updateState.status !== 'available') return;
+  if (PORTABLE) { shell.openExternal(RELEASES_URL); return; }
+  setUpdateState('downloading', {
+    version: updateState.version, notes: updateState.notes, percent: 0,
+  });
+  autoUpdater.downloadUpdate().catch(() => { /* ya lo reporta 'error' */ });
+});
+
+ipcMain.on('update:install', () => {
+  /* Sin nada descargado, quitAndInstall cierra la app y no instala nada: seria
+   * perder el trabajo a cambio de nada. */
+  if (updateState.status !== 'ready') return;
+  /* Silencioso y volviendo a abrir sola: la actualizacion es un tramite, no una
+   * visita al instalador. Si el modo silencioso no prosperara, autoInstallOnAppQuit
+   * sigue en pie y el instalador aparece al cerrar. */
+  autoUpdater.quitAndInstall(true, true);
+});
+
+ipcMain.on('update:page', () => shell.openExternal(RELEASES_URL));

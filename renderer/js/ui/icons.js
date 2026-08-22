@@ -61,6 +61,14 @@ export const ICONS = {
   clear: 'M4.5 4.5h15v15h-15z M9 9l6 6 M15 9l-6 6',
   flipH: 'M12 3v18 M8.5 7.5L4.5 12l4 4.5 M15.5 7.5l4 4.5-4 4.5',
   resize: 'M3.5 3.5h17v17h-17z M14 10h6.5 M14 10V3.5',
+  // las dos orientaciones: la misma hoja, dada vuelta
+  portrait: 'M6.5 3.5h11v17h-11z',
+  landscape: 'M3.5 6.5h17v11h-17z',
+  alert: 'M12 4.5L21 20H3z M12 10.5v4 M12 17.3h.01',
+  // baja algo a la maquina; el de exportar sale al reves y no son lo mismo
+  download: 'M12 3.5v11.5 M7.5 10.5l4.5 4.5 4.5-4.5 M4 20.5h16',
+  // flecha que da la vuelta: reiniciar para aplicar
+  restart: 'M20.5 12a8.5 8.5 0 1 1-2.6-6.1 M20.5 3.5V9h-5.5',
 
   // ── controles de ventana ────────────────────────────────────────────────
   winMin: 'M4 12h16',

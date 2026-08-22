@@ -133,6 +133,44 @@ export function makeSlider(opts) {
   return { el: wrap, set: (v) => set(v, false), get: () => value, slider };
 }
 
+// ── segmentado ──────────────────────────────────────────────────────────────
+
+/* opts: { options: [{id, name, iconName}], value, onChange, tip }
+ *
+ * Dos o tres opciones excluyentes, todas a la vista. No es un select por una
+ * razon concreta: elegir entre vertical y horizontal con un desplegable esconde
+ * la mitad de la respuesta detras de un clic, y son justo las dos cosas que uno
+ * quiere comparar de un vistazo. */
+export function makeSegment(opts) {
+  const { options, onChange, tip = null } = opts;
+  let value = opts.value ?? options[0]?.id;
+
+  const wrap = el('div', 'sc-seg');
+  if (tip) wrap.setAttribute('data-tip', tip);
+
+  const btns = new Map();
+  for (const o of options) {
+    const b = el('button', 'sc-seg__btn');
+    if (o.iconName) b.append(icon(o.iconName, 13));
+    b.append(el('span', null, { text: o.name }));
+    b.addEventListener('click', () => set(o.id, true));
+    btns.set(o.id, b);
+    wrap.append(b);
+  }
+
+  function paint() { for (const [id, b] of btns) b.classList.toggle('on', id === value); }
+
+  function set(v, notify = false) {
+    if (v === value || !btns.has(v)) return;
+    value = v;
+    paint();
+    if (notify) onChange?.(value);
+  }
+
+  paint();
+  return { el: wrap, set: (v) => set(v, false), get: () => value };
+}
+
 // ── select ──────────────────────────────────────────────────────────────────
 
 /* opts: { options: [{id, name}], value, onChange, tip }
@@ -225,13 +263,23 @@ export function makeSelect(host, opts) {
   }
 
   btn.addEventListener('click', () => (open ? close() : openPop()));
-  window.addEventListener('resize', () => open && place());
+  const onWinResize = () => open && place();
+  window.addEventListener('resize', onWinResize);
 
   paint();
   return {
     set: (v) => setValue(v, false),
     get: () => value,
     close,
+    /* El popover vive en el body, fuera del arbol del host: si el host se
+     * desmonta — un dialogo que se cierra — el popover se quedaria colgado ahi
+     * para siempre, uno mas por cada vez que se abra. Los selects de los paneles
+     * viven lo que vive la app y nunca lo llaman; los de un dialogo, si. */
+    destroy() {
+      close();
+      window.removeEventListener('resize', onWinResize);
+      pop.remove();
+    },
     setOptions(next) {
       // no se usa todavia, pero deja el control reutilizable sin reescribirlo
       pop.replaceChildren();

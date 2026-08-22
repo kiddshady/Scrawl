@@ -71,28 +71,54 @@ export class Layer {
 }
 
 export class ScrawlDoc {
-  constructor(w = 1920, h = 1200) {
+  constructor(w = 1920, h = 1200, dpi = 96) {
     this.width = w;
     this.height = h;
+
+    /* Pixeles por pulgada del documento. No cambia un solo pixel de lo que se
+     * dibuja: es la escala con la que esos pixeles se miden al salir a papel, y
+     * lo que hace que el PDF exportado tenga el tamano fisico correcto. 96 es la
+     * densidad con la que Windows y el navegador miden todo, asi que es el
+     * default de un lienzo que no se penso para imprimir. */
+    this.dpi = dpi;
+
+    /* Papel al que corresponde el lienzo — { id, orientation } — o null si es una
+     * medida libre. Se guarda en vez de deducirse porque es una INTENCION: dice
+     * "este documento es una A4", y de ahi sale que pegar una captura ya no
+     * agrande el lienzo. Deducirlo de los pixeles daria el mismo nombre pero no
+     * distinguiria un A4 elegido de un lienzo que por casualidad mide lo mismo. */
+    this.paper = null;
 
     this.layers = [];
     this.activeIndex = 0;
 
-    // composicion final, lo unico que el viewport lee
-    this.flat = makeCanvas(w, h);
-    this.flatCtx = this.flat.getContext('2d', { willReadFrequently: true });
-
-    // cache de las capas debajo de la activa
-    this.below = makeCanvas(w, h);
-    this.belowCtx = this.below.getContext('2d');
-    this.belowDirty = true;
-
-    // scratch para mezclar la capa activa con el trazo en curso
-    this.scratch = makeCanvas(w, h);
-    this.scratchCtx = this.scratch.getContext('2d');
+    this.#buildBuffers();
 
     this.addLayer(0, 'Background');
   }
+
+  /* Los tres canvas de trabajo, al tamano actual. Se rearman enteros en vez de
+   * redimensionarse porque cambiarle el width a un canvas ya lo borra: no hay
+   * nada que conservar en ninguno de los tres, todos son cache. */
+  #buildBuffers() {
+    // composicion final, lo unico que el viewport lee
+    this.flat = makeCanvas(this.width, this.height);
+    this.flatCtx = this.flat.getContext('2d', { willReadFrequently: true });
+
+    // cache de las capas debajo de la activa
+    this.below = makeCanvas(this.width, this.height);
+    this.belowCtx = this.below.getContext('2d');
+
+    // scratch para mezclar la capa activa con el trazo en curso
+    this.scratch = makeCanvas(this.width, this.height);
+    this.scratchCtx = this.scratch.getContext('2d');
+
+    this.belowDirty = true;
+  }
+
+  /* Version publica: la usa el historial, que restaura los canvas de las capas
+   * por su cuenta y despues necesita que los buffers acompanen al tamano. */
+  rebuildBuffers() { this.#buildBuffers(); }
 
   get active() { return this.layers[this.activeIndex] || null; }
 
@@ -267,34 +293,54 @@ export class ScrawlDoc {
 
   // ── redimensionado ────────────────────────────────────────────────────────
 
-  /* Cambia el tamano del lienzo conservando el contenido. Usado al pegar o abrir
-   * una imagen mas grande que el documento actual. */
-  resize(w, h, mode = 'keep') {
+  /* Cambia el tamano del lienzo conservando el contenido. Lo usan tanto pegar
+   * una imagen mas grande que el documento como el dialogo de tamano del lienzo.
+   *
+   *   anchor  donde queda el contenido viejo dentro del nuevo lienzo. Los nueve
+   *           puntos cardinales; 'keep' y 'center' son los alias historicos de
+   *           'nw' y 'c'. Solo importa cuando el lienzo cambia de medida: es lo
+   *           que decide que borde crece y cual se recorta.
+   *   scale   con true el contenido se estira o se achica para entrar entero en
+   *           el lienzo nuevo, en vez de recortarse. Conserva la proporcion, asi
+   *           que lo que sobra del otro lado lo reparte el anchor.
+   *
+   * Los pixeles que quedan afuera se PIERDEN aca: este metodo no guarda nada.
+   * Quien lo llama es responsable de anotar el paso en el historial si quiere
+   * poder volver — canvasEntry() en history.js hace justo eso, y sin copiar un
+   * solo pixel, porque los canvas viejos que esto descarta siguen sirviendo. */
+  resize(w, h, anchor = 'keep', scale = false) {
+    if (w === this.width && h === this.height) return;
+
     const old = { w: this.width, h: this.height };
     this.width = w;
     this.height = h;
 
-    let dx = 0, dy = 0;
-    if (mode === 'center') {
-      dx = Math.round((w - old.w) / 2);
-      dy = Math.round((h - old.h) / 2);
-    }
+    // cuanto mide el contenido ya colocado: el lienzo viejo, escalado o no
+    const k = scale ? Math.min(w / old.w, h / old.h) : 1;
+    const cw = old.w * k;
+    const ch = old.h * k;
+
+    const [ax, ay] = anchorAt(anchor);
+    const dx = Math.round((w - cw) * ax);
+    const dy = Math.round((h - ch) * ay);
 
     for (const l of this.layers) {
       const prev = l.canvas;
       l.canvas = makeCanvas(w, h);
       l.ctx = l.canvas.getContext('2d', { willReadFrequently: true });
-      l.ctx.drawImage(prev, dx, dy);
+      if (scale) {
+        // al achicar, el remuestreo barato deja escalones; esto es una sola
+        // operacion por capa y por redimensionado, asi que la calidad sale gratis
+        l.ctx.imageSmoothingEnabled = true;
+        l.ctx.imageSmoothingQuality = 'high';
+        l.ctx.drawImage(prev, dx, dy, Math.round(cw), Math.round(ch));
+      } else {
+        l.ctx.drawImage(prev, dx, dy);
+      }
       l.rev++;
     }
 
-    this.flat = makeCanvas(w, h);
-    this.flatCtx = this.flat.getContext('2d', { willReadFrequently: true });
-    this.below = makeCanvas(w, h);
-    this.belowCtx = this.below.getContext('2d');
-    this.scratch = makeCanvas(w, h);
-    this.scratchCtx = this.scratch.getContext('2d');
-    this.belowDirty = true;
+    this.#buildBuffers();
   }
 
   // ── serializacion ─────────────────────────────────────────────────────────
@@ -305,6 +351,11 @@ export class ScrawlDoc {
       version: 1,
       width: this.width,
       height: this.height,
+      /* Campos opcionales: un .scrawl viejo no los trae y se abre igual, con los
+       * 96 DPI de pantalla. Por eso no suben la version del formato — no hay
+       * nada que un lector viejo pueda leer mal, solo algo que no va a mirar. */
+      dpi: this.dpi,
+      paper: this.paper,
       activeIndex: this.activeIndex,
       layers: this.layers.map((l) => ({
         name: l.name,
@@ -319,7 +370,8 @@ export class ScrawlDoc {
   }
 
   static async fromJSON(obj) {
-    const doc = new ScrawlDoc(obj.width, obj.height);
+    const doc = new ScrawlDoc(obj.width, obj.height, obj.dpi ?? 96);
+    doc.paper = obj.paper ?? null;
     doc.layers = [];
     for (const raw of obj.layers) {
       const l = new Layer(obj.width, obj.height, raw.name);
@@ -341,6 +393,22 @@ export class ScrawlDoc {
 }
 
 // ── utilidades ──────────────────────────────────────────────────────────────
+
+/* Los nueve anclajes, como fraccion del espacio sobrante que va antes del
+ * contenido. 'c' reparte mitad y mitad; 'nw' no deja nada antes y todo despues.
+ * La misma cuenta sirve para crecer y para recortar: cuando el lienzo se achica
+ * el sobrante es negativo y la fraccion decide que borde se come. */
+const ANCHORS = {
+  nw: [0, 0],   n: [0.5, 0],   ne: [1, 0],
+  w:  [0, 0.5], c: [0.5, 0.5], e:  [1, 0.5],
+  sw: [0, 1],   s: [0.5, 1],   se: [1, 1],
+};
+
+export function anchorAt(anchor) {
+  if (anchor === 'keep') return ANCHORS.nw;
+  if (anchor === 'center') return ANCHORS.c;
+  return ANCHORS[anchor] || ANCHORS.nw;
+}
 
 export function loadImage(src) {
   return new Promise((res, rej) => {

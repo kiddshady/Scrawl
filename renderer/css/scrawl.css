@@ -599,7 +599,7 @@ input  { font: inherit; color: inherit; }
 
 .sc-select__pop {
   position: fixed;
-  z-index: 60;
+  z-index: 180;
   min-width: 150px;
   max-height: 260px;
   overflow-y: auto;
@@ -889,6 +889,18 @@ input  { font: inherit; color: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .sc-status__item svg { color: var(--sc-tx4); }
+/* el tamano del lienzo es ademas el acceso al dialogo que lo cambia: el dato y
+ * el lugar donde se edita son el mismo, que es donde uno va a buscarlo */
+.sc-status__item--btn {
+  height: 18px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: var(--sc-r-sm);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-status__item--btn:hover { background: var(--sc-s3); color: var(--sc-tx2); }
+.sc-status__item--btn:hover svg { color: var(--sc-tx3); }
 .sc-status__spacer { flex: 1; }
 .sc-status__hint { font-family: var(--sc-font); transition: opacity var(--sc-t) var(--sc-ease); }
 
@@ -959,3 +971,298 @@ input  { font: inherit; color: inherit; }
 .sc-menu__item > span { flex: 1; text-align: left; }
 .sc-menu__key { font-family: var(--sc-mono); font-size: 10.5px; color: var(--sc-tx4); }
 .sc-menu__rule { height: 1px; background: var(--sc-line); margin: 4px 6px; }
+
+/* ── dialogo modal ────────────────────────────────────────────────────────── */
+/* No es un <dialog> nativo: su ::backdrop no se anima de entrada y de salida
+ * como el resto de las superficies de la app, y el Escape lo cierra de golpe. */
+
+.sc-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 170;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, .55);
+  opacity: 0;
+  transition: opacity var(--sc-t) var(--sc-ease);
+}
+.sc-veil.show { opacity: 1; }
+
+.sc-modal {
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--sc-s1);
+  border-radius: var(--sc-r-lg);
+  /* el contorno fino va como sombra inset y no como border: un border real sobre
+   * una caja redondeada deja una hilacha de 1px en cada esquina */
+  box-shadow: var(--sc-sh3), inset 0 0 0 1px var(--sc-line);
+  /* la caja entra un toque despues del fondo, subiendo: el velo se funde y ella
+   * llega, en vez de aparecer los dos como un bloque */
+  transform: translateY(10px) scale(.985);
+  transition: transform var(--sc-t) var(--sc-ease);
+}
+.sc-veil.show .sc-modal { transform: none; }
+
+.sc-modal__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--sc-line);
+  flex: none;
+}
+.sc-modal__icon { display: flex; color: var(--sc-ac); flex: none; }
+/* vacio cuando el dialogo no lleva icono: sin esto dejaria un hueco del gap */
+.sc-modal__icon:empty { display: none; }
+.sc-modal__title { flex: 1; font-size: 12.5px; font-weight: 600; }
+
+/* Sin mascara de esfumado, a proposito: arriba el scroll corta contra la linea
+ * de la cabecera y abajo contra la del pie. Esa linea YA es el limite; un fade
+ * encima la ensuciaria y mentiria, porque el contenido no muere en el aire. */
+.sc-modal__body {
+  padding: 12px 14px 14px;
+  overflow-y: auto;
+}
+
+.sc-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--sc-line);
+  flex: none;
+}
+
+/* la medida fisica: es un dato exacto, va en mono */
+.sc-modal__note {
+  margin-top: 10px;
+  padding: 7px 10px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r-sm);
+  font-family: var(--sc-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sc-tx2);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.sc-modal__rule { height: 1px; background: var(--sc-line); margin: 14px 0 4px; }
+.sc-modal__hint { margin: 0; font-size: 11px; line-height: 1.4; color: var(--sc-tx3); }
+
+/* ── botones de dialogo ───────────────────────────────────────────────────── */
+
+.sc-btn {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--sc-r-sm);
+  font-size: 12px;
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease),
+              transform var(--sc-t-fast) var(--sc-ease);
+}
+.sc-btn:active { transform: scale(.97); }
+.sc-btn--ghost { color: var(--sc-tx2); }
+.sc-btn--ghost:hover { background: var(--sc-s3); color: var(--sc-tx); }
+/* el acento como bisturi: marca LA accion primaria, y es lo unico coloreado */
+.sc-btn--primary { background: var(--sc-ac); color: var(--sc-bg); font-weight: 600; }
+.sc-btn--primary:hover { background: var(--sc-ac-hi); }
+.sc-btn:disabled { background: var(--sc-s2); color: var(--sc-tx4); cursor: default; }
+.sc-btn:disabled:hover { background: var(--sc-s2); color: var(--sc-tx4); }
+.sc-btn:disabled:active { transform: none; }
+
+/* ── filas y campos de dialogo ────────────────────────────────────────────── */
+
+.sc-row { display: flex; gap: 10px; margin-top: 11px; }
+.sc-row > * { flex: 1; min-width: 0; }
+.sc-row--anchor { align-items: flex-start; gap: 14px; }
+.sc-row--anchor > .sc-anchor { flex: none; }
+
+.sc-cell { display: flex; flex-direction: column; gap: 5px; }
+.sc-cell__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--sc-tx3);
+}
+.sc-stack { display: flex; flex-direction: column; gap: 8px; }
+
+/* ── campo numerico ───────────────────────────────────────────────────────── */
+
+.sc-num {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px 0 9px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r-sm);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              box-shadow var(--sc-t-fast) var(--sc-ease);
+}
+.sc-num:hover { background: var(--sc-s3); }
+.sc-num:focus-within { background: var(--sc-s3); box-shadow: inset 0 0 0 1px var(--sc-ac-dim); }
+.sc-num input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  font-family: var(--sc-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sc-tx);
+}
+/* el anillo de foco lo lleva la caja entera: dos anillos concentricos serian uno de mas */
+.sc-num input:focus-visible { box-shadow: none; }
+.sc-num__unit {
+  flex: none;
+  margin-left: 6px;
+  font-family: var(--sc-mono);
+  font-size: 10.5px;
+  color: var(--sc-tx4);
+}
+
+/* ── segmentado ───────────────────────────────────────────────────────────── */
+
+.sc-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r-sm);
+}
+.sc-seg__btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--sc-tx3);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-seg__btn > svg { flex: none; }
+.sc-seg__btn:hover { color: var(--sc-tx); }
+.sc-seg__btn.on { background: var(--sc-ac-soft); color: var(--sc-ac); }
+
+/* ── grilla de anclaje ────────────────────────────────────────────────────── */
+/* Nueve casillas: donde queda el dibujo actual dentro del lienzo nuevo. */
+
+.sc-anchor {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  width: 76px;
+  padding: 3px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r-sm);
+}
+.sc-anchor__cell {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  transition: background var(--sc-t-fast) var(--sc-ease);
+}
+.sc-anchor__cell > span {
+  width: 7px; height: 7px;
+  border-radius: 2px;
+  background: var(--sc-s5);
+  transition: background var(--sc-t) var(--sc-ease),
+              transform var(--sc-t) var(--sc-ease);
+}
+.sc-anchor__cell:hover > span { background: var(--sc-tx3); }
+.sc-anchor__cell.on { background: var(--sc-ac-soft); }
+.sc-anchor__cell.on > span { background: var(--sc-ac); transform: scale(1.35); }
+
+/* ── aviso del dialogo ────────────────────────────────────────────────────── */
+/* Aparece y se va animando el alto con grid-template-rows (0fr -> 1fr): height
+ * exigiria medir el contenido en JS y dispara relayout en cada frame. */
+
+.sc-warn {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--sc-t-slow) var(--sc-ease),
+              opacity var(--sc-t) var(--sc-ease);
+}
+.sc-warn.on { grid-template-rows: 1fr; opacity: 1; }
+.sc-warn__inner { overflow: hidden; min-height: 0; }
+.sc-warn__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: var(--sc-r-sm);
+  background: color-mix(in srgb, var(--sc-ac) 9%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sc-tx2);
+}
+.sc-warn__row > svg { color: var(--sc-ac); flex: none; margin-top: 1px; }
+
+/* ── aviso de actualizacion ───────────────────────────────────────────────── */
+/* Una pastilla en la barra de estado, y el unico color de esa barra. Se enciende
+ * sola cuando hay version nueva y no hace nada mas: no roba el foco, no abre
+ * nada, no interrumpe un dibujo. */
+
+.sc-update {
+  color: var(--sc-ac);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity var(--sc-t) var(--sc-ease),
+              transform var(--sc-t) var(--sc-ease),
+              background var(--sc-t-fast) var(--sc-ease),
+              color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-update.on { opacity: 1; transform: none; }
+.sc-update svg { color: var(--sc-ac); }
+.sc-update:hover { background: var(--sc-ac-soft); color: var(--sc-ac-hi); }
+.sc-update:hover svg { color: var(--sc-ac-hi); }
+
+.sc-upd__head { display: flex; align-items: baseline; gap: 9px; }
+.sc-upd__ver { font-size: 14px; font-weight: 600; color: var(--sc-tx); }
+.sc-upd__now {
+  font-family: var(--sc-mono);
+  font-size: 11px;
+  color: var(--sc-tx3);
+}
+
+/* Las notas del release. Es texto real que alguien podria querer copiar, asi que
+ * es seleccionable; y el scroll corta contra el contorno propio del bloque, que
+ * ya es el limite, asi que no lleva esfumado encima. */
+.sc-notes {
+  margin-top: 11px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 9px 11px;
+  background: var(--sc-s2);
+  border-radius: var(--sc-r-sm);
+  box-shadow: inset 0 0 0 1px var(--sc-line);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--sc-tx2);
+  white-space: pre-wrap;
+}
+
+.sc-progress {
+  margin-top: 13px;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--sc-s3);
+  overflow: hidden;
+}
+.sc-progress__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--sc-ac);
+  transition: width var(--sc-t) var(--sc-ease);
+}
+
+.sc-modal__hint--block { margin-top: 11px; }

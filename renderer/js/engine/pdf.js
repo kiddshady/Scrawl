@@ -11,11 +11,14 @@
  * /SMask — un segundo objeto imagen en escala de grises que el visor aplica como
  * mascara — porque un stream de imagen de PDF no sabe guardar RGBA junto. */
 
-/* La pagina mide lo que mide la imagen, contando los pixeles a 96 DPI: es la
- * densidad con la que Windows y el navegador miden todo, asi que el PDF sale del
- * tamano al que estabas viendo el dibujo al 100%. El PDF mide en puntos (1/72"),
- * de ahi la conversion. */
-const PT_PER_PX = 72 / 96;
+/* La pagina mide lo que mide la imagen a la densidad del documento: 2480 px a
+ * 300 DPI son 8.27 pulgadas, o sea el ancho de una A4. Un lienzo sin tamano de
+ * impresion queda en los 96 DPI con los que Windows y el navegador miden todo,
+ * asi que sale del tamano al que estabas viendo el dibujo al 100%.
+ *
+ * El PDF mide en puntos (1/72"), de ahi las dos conversiones. */
+const PT_PER_IN = 72;
+const MM_PER_IN = 25.4;
 
 const enc = new TextEncoder();
 
@@ -100,8 +103,19 @@ function pdfDate(d = new Date()) {
 }
 
 /* Recibe un ImageData (o cualquier cosa con width/height/data en RGBA) y devuelve
- * los bytes de un PDF de una sola pagina con esa imagen a tamano completo. */
-export async function buildPDF(image) {
+ * los bytes de un PDF de una sola pagina con esa imagen a tamano completo.
+ *
+ *   dpi     densidad del documento: cuantos de esos pixeles entran en una pulgada
+ *           de papel.
+ *   pageMm  [ancho, alto] en milimetros para forzar la medida EXACTA de la hoja.
+ *           Va cuando el lienzo se armo sobre un papel concreto, y existe por el
+ *           redondeo: una A4 a 300 DPI son 2480 px, que vueltos a puntos dan
+ *           595.2 en vez de los 595.28 de la norma. La diferencia es de tres
+ *           centesimas de milimetro y ningun ojo la ve, pero es la diferencia
+ *           entre que el visor anuncie "A4" y que anuncie "personalizado", y de
+ *           ahi que la impresora ofrezca ajustar a la hoja. La imagen se estira
+ *           esas tres centesimas para llenarla. */
+export async function buildPDF(image, { dpi = 96, pageMm = null } = {}) {
   const { width, height } = image;
   const rgba = image.data;
 
@@ -116,8 +130,8 @@ export async function buildPDF(image) {
   const alpha = opaque ? null : await deflate(filterRows(rgba, width, height, 1));
 
   // dos decimales alcanzan: es 1/3600 de pulgada
-  const pw = Number((width * PT_PER_PX).toFixed(2));
-  const ph = Number((height * PT_PER_PX).toFixed(2));
+  const pw = Number((pageMm ? (pageMm[0] / MM_PER_IN) * PT_PER_IN : (width / dpi) * PT_PER_IN).toFixed(2));
+  const ph = Number((pageMm ? (pageMm[1] / MM_PER_IN) * PT_PER_IN : (height / dpi) * PT_PER_IN).toFixed(2));
 
   /* El contenido de la pagina entero: la matriz 'cm' estira la imagen (que en PDF
    * siempre mide 1x1) hasta cubrir la pagina, y 'Do' la pinta. */
