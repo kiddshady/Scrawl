@@ -20,7 +20,8 @@
   },
   "devDependencies": {
     "electron": "40.10.6",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.62.1"
   },
   "build": {
     "appId": "com.umbrovex.scrawl",
