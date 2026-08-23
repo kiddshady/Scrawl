@@ -225,6 +225,12 @@ function beginStroke(pt, mods) {
   // la goma del stylus fuerza el borrador aunque el pincel elegido sea otro
   const effective = t === 'eraser' ? brushes.eraser : brush;
 
+  /* Un lapiz sin hover apoya sin haber emitido ningun pointermove: el anillo
+   * quedaria donde estaba. Y aunque haya habido hover, el radio puede cambiar
+   * recien aca — la goma del stylus dada vuelta se conoce en este momento. */
+  hoverPt = pt;
+  view.cursor = { x: pt.x, y: pt.y, r: (effective.size / 2) * view.scale };
+
   painter.begin(effective, color);
 
   // shift al apoyar = linea recta, sin cambiar de herramienta
@@ -271,6 +277,18 @@ function moveStroke(pt, mods) {
   if (!stroke) return;
 
   const docPt = view.toDoc(pt.x, pt.y);
+
+  /* El anillo sigue al puntero tambien durante el trazo: con la goma es la unica
+   * senal de por donde va, porque borrar no deja marca visible. El radio sale
+   * del pincel del trazo y no de effectiveTool(), que sin mods no se entera de
+   * la goma del stylus dada vuelta. El invalidate es necesario aparte del de
+   * flushStroke: un movimiento que el suavizado descarta no ensucia nada, y sin
+   * el, el anillo se quedaria quieto justo en los trazos mas finos. */
+  hoverPt = pt;
+  view.cursor = { x: pt.x, y: pt.y, r: (stroke.brush.size / 2) * view.scale };
+  q('sc-st-pos').textContent = `${Math.round(docPt.x)}, ${Math.round(docPt.y)}`;
+  invalidate();
+
   if (stroke.straight) {
     paintStraight({ x: docPt.x, y: docPt.y, p: pt.p });
   } else {
