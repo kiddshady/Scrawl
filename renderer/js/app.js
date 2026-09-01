@@ -100,6 +100,11 @@ let panelsHidden = false;
 let placing = null;
 let placeDrag = null;
 
+/* La recta tiene un redibujado pendiente para el proximo frame. Ver
+ * renderStraight: es lo que junta los cuatro o cinco puntos que una tableta
+ * entrega por frame en un solo trazado. */
+let straightPending = false;
+
 const params = new URLSearchParams(location.search);
 const UI_MODE = params.get('ui');
 
@@ -111,6 +116,8 @@ function invalidate() {
   scheduled = true;
   requestAnimationFrame(() => {
     scheduled = false;
+    // la recta se traza una vez por frame, con la ultima posicion que llego
+    if (straightPending) renderStraight();
     /* La barra cuelga de la caja en coordenadas de PANTALLA, asi que la corre
      * cualquier cosa que mueva la vista: zoom, paneo, encajar, abrir los
      * paneles. Recolocarla junto al frame la deja pegada a la caja sin que cada
@@ -270,13 +277,19 @@ function beginStroke(pt, mods) {
     layer,
     brush: effective,
     straight,
-    from: { x: docPt.x, y: docPt.y, p: pt.p },
+    from: { x: docPt.x, y: docPt.y },
+    /* Solo para la recta: donde esta la punta AHORA, y UNA presion para todo su
+     * largo. Los puntos de por medio no se guardan porque no significan nada —
+     * una recta es sus dos extremos. */
+    to: { x: docPt.x, y: docPt.y },
+    pressure: pt.p,
     lastRect: null,
     path: null,
   };
 
   if (straight) {
-    paintStraight({ x: docPt.x, y: docPt.y, p: pt.p });
+    renderStraight();
+    invalidate();
   } else {
     stroke.path = new StrokePath((a, b) => painter.segment(a, b));
     const first = stroke.path.begin({ x: docPt.x, y: docPt.y, p: pt.p }, effective.smoothing);
@@ -321,7 +334,12 @@ function moveStroke(pt, mods) {
   invalidate();
 
   if (stroke.straight) {
-    paintStraight({ x: docPt.x, y: docPt.y, p: pt.p });
+    stroke.to = { x: docPt.x, y: docPt.y };
+    /* La presion de la recta es la mas FUERTE que vio el gesto, no la del
+     * instante. Ver el porque en renderStraight. */
+    stroke.pressure = Math.max(stroke.pressure, pt.p);
+    straightPending = true;
+    invalidate();
   } else {
     stroke.path.push({ x: docPt.x, y: docPt.y, p: pt.p });
     flushStroke();
@@ -329,21 +347,46 @@ function moveStroke(pt, mods) {
   updatePressureMeter(pt);
 }
 
-/* La linea recta se re-dibuja entera en cada movimiento: se limpia el wet y se
- * vuelve a trazar desde el origen. Barato porque el wet es un solo canvas, y es
- * lo que permite ver la linea siguiendo al puntero antes de soltar. */
-function paintStraight(to) {
+/* La linea recta se re-dibuja ENTERA cada vez: se limpia el wet y se vuelve a
+ * trazar desde el origen. Es lo que permite verla seguir al puntero antes de
+ * soltar. Dos cosas la hacen distinta de un trazo a mano alzada:
+ *
+ * ── Una sola presion para todo el largo, y es la mas fuerte del gesto ───────
+ * Antes cada extremo llevaba su presion instantanea y el rasterizador
+ * interpolaba entre las dos. Con un lapiz eso no es un degrade, es un bug: la
+ * presion del ARRANQUE es siempre casi cero — la punta recien toca — y la del
+ * otro extremo cambia a cada momento, asi que la linea entera cambiaba de peso
+ * mientras uno la estiraba y, al levantar el lapiz, la presion cae a cero y la
+ * linea se desplomaba a un pelo tenue justo en el frame que se guardaba. Con
+ * mouse no se veia nunca: ahi la presion es 1 fija.
+ *
+ * Se toma el maximo y no la actual porque el maximo no retrocede. Apretar mas
+ * engorda la linea — la expresion se conserva — pero aflojar para levantar la
+ * punta ya no se la lleva puesta. Y con las dos puntas a la misma presion la
+ * recta sale de ancho parejo, que es lo que una recta tiene que ser: la cuna
+ * que salia antes (fina en el origen, gruesa en la punta) tampoco la queria
+ * nadie.
+ *
+ * ── Un redibujado por FRAME, no por evento ─────────────────────────────────
+ * Redibujar la recta cuesta en proporcion a su largo: con un pincel fino son
+ * miles de estampas, medidas en 7-12 ms cada vez. Una tableta entrega cuatro o
+ * cinco puntos por frame y todos entraban por aca, asi que el trabajo se
+ * multiplicaba por cinco y el hilo principal no llegaba — de ahi el tironeo.
+ * Coalescer a uno por frame no pierde NADA: para una recta los puntos de por
+ * medio no existen, solo cuenta donde esta la punta ahora. */
+function renderStraight() {
+  straightPending = false;
+  if (!stroke || !stroke.straight) return;
+
   const before = painter.clearWet();
-  const a = stroke.from;
-  if (Math.hypot(to.x - a.x, to.y - a.y) < 0.5) painter.dot(a);
-  else painter.segment(a, to);
+  const a = { x: stroke.from.x, y: stroke.from.y, p: stroke.pressure };
+  const b = { x: stroke.to.x, y: stroke.to.y, p: stroke.pressure };
+  if (Math.hypot(b.x - a.x, b.y - a.y) < 0.5) painter.dot(a);
+  else painter.segment(a, b);
 
   // hay que recomponer tambien donde ESTABA la linea, o queda su fantasma
   const region = unionRect(before, painter.dirty);
-  if (region) {
-    doc.recompose(region, painter.wetLayer);
-    invalidate();
-  }
+  if (region) doc.recompose(region, painter.wetLayer);
 }
 
 /* Recompone solo lo que se pinto desde el ultimo frame. Con un trazo largo, el
@@ -376,6 +419,11 @@ function endStroke() {
   }
   if (placeDrag) { endPlaceDrag(); return; }
   if (!stroke) return;
+
+  /* La recta puede tener un frame pendiente: el ultimo movimiento del puntero
+   * llego despues del ultimo rAF. Sin esto se guardaria la linea del frame
+   * anterior y la punta quedaria un paso atras de donde se solto. */
+  if (straightPending) renderStraight();
 
   if (stroke.path) {
     stroke.path.end();
