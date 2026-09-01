@@ -408,6 +408,73 @@ input  { font: inherit; color: inherit; }
 .sc-puck[data-active="core"] .sc-puck__lens  { stroke: var(--sc-ac); }
 .sc-puck[data-active="core"] .sc-puck__arrow { stroke: var(--sc-tx3); }
 
+/* ── barra de la imagen colocandose ───────────────────────────────────────── */
+
+/* Cuelga de la caja de la imagen pegada y la sigue. Misma superficie que el HUD
+ * de zoom — es el otro flotante sobre el lienzo, y dos vidrios distintos ahi
+ * arriba se leerian como dos apps. */
+.sc-place {
+  position: absolute;
+  left: 0; top: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--sc-s2) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-radius: var(--sc-r);
+  box-shadow: var(--sc-sh2);
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity var(--sc-t) var(--sc-ease), transform var(--sc-t) var(--sc-ease);
+}
+.sc-place.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+/* Mientras se arrastra la imagen, la barra se corre detras de ella: sigue a la
+ * caja, asi que quedarse opaca significaria quedarse justo abajo de la mano. */
+.sc-place.show.busy { opacity: .22; pointer-events: none; }
+
+.sc-place__size {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--sc-r-sm);
+  font-family: var(--sc-mono);
+  font-size: 11px;
+  color: var(--sc-tx2);
+  white-space: nowrap;
+  transition: background var(--sc-t-fast) var(--sc-ease), color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-place__size:hover { background: var(--sc-s4); color: var(--sc-tx); }
+/* El porcentaje solo esta cuando la imagen dejo de estar a tamano real, asi que
+ * su presencia ya es la senal: en ambar, que es lo unico que la app tinta. */
+.sc-place__pct:not(:empty) { color: var(--sc-ac); }
+
+.sc-place__sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--sc-line);
+}
+
+.sc-place__btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--sc-r-sm);
+  font-size: 12px;
+  color: var(--sc-tx2);
+  transition: background var(--sc-t-fast) var(--sc-ease), color var(--sc-t-fast) var(--sc-ease);
+}
+.sc-place__btn:hover { background: var(--sc-s4); color: var(--sc-tx); }
+.sc-place__btn--go { color: var(--sc-ac); }
+.sc-place__btn--go:hover { background: var(--sc-ac-soft); color: var(--sc-ac-hi); }
+
 /* ── paneles (derecha) ────────────────────────────────────────────────────── */
 
 .sc-panels {

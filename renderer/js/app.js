@@ -31,6 +31,7 @@ import { initColor } from './ui/color.js';
 import { initLayers } from './ui/layers.js';
 import { initBrushPanel } from './ui/brushpanel.js';
 import { initPuck } from './ui/puck.js';
+import { initPlaceBar } from './ui/placebar.js';
 
 const q = (id) => document.getElementById(id);
 
@@ -92,6 +93,13 @@ let dirtyDoc = false;
 let docPath = null;
 let panelsHidden = false;
 
+/* Imagen pegada que todavia no aterrizo, y el arrastre que la esta acomodando.
+ * Mientras placing existe, el lienzo es de ella: mover y escalar mandan sobre
+ * cualquier herramienta. Es el mismo objeto que view.placement — el viewport lo
+ * pinta, aca se lo mueve. */
+let placing = null;
+let placeDrag = null;
+
 const params = new URLSearchParams(location.search);
 const UI_MODE = params.get('ui');
 
@@ -103,6 +111,11 @@ function invalidate() {
   scheduled = true;
   requestAnimationFrame(() => {
     scheduled = false;
+    /* La barra cuelga de la caja en coordenadas de PANTALLA, asi que la corre
+     * cualquier cosa que mueva la vista: zoom, paneo, encajar, abrir los
+     * paneles. Recolocarla junto al frame la deja pegada a la caja sin que cada
+     * uno de esos caminos tenga que acordarse de avisar. */
+    if (placing) syncPlaceBar();
     view.draw();
   });
 }
@@ -136,6 +149,7 @@ function brushFor(t) {
 }
 
 function setTool(next, { silent = false } = {}) {
+  commitPlacement();
   if (!(next in brushes) && !['line', 'fill', 'picker', 'pan'].includes(next)) return;
   tool = next;
   for (const b of document.querySelectorAll('[data-tool]')) {
@@ -182,6 +196,16 @@ function updateCanvasCursor() {
      * el cursor si trabaja — ahi la mano es toda la senal de que se desplaza. */
     const overCore = zooming || (!panning && hoverPt && puck.zoneAt(hoverPt.x, hoverPt.y) === 'core');
     canvas.style.cursor = overCore ? 'none' : panning ? 'grabbing' : 'grab';
+  } else if (placing) {
+    /* Acomodando una imagen el cursor es el del sistema y no el anillo: aca no
+     * se pinta nada, se agarra — y las flechas diagonales son lo unico que dice
+     * que esas esquinas escalan. Durante el arrastre manda el tirador tomado y
+     * no lo que haya abajo del puntero, que con la mano rapida se le escapa. */
+    const h = placeDrag ? placeDrag.hit
+      : hoverPt ? view.placementHitAt(hoverPt.x, hoverPt.y) : null;
+    canvas.style.cursor = (h === 'nw' || h === 'se') ? 'nwse-resize'
+      : (h === 'ne' || h === 'sw') ? 'nesw-resize'
+      : 'move';
   } else if (t === 'picker') canvas.style.cursor = 'crosshair';
   else if (t === 'fill') canvas.style.cursor = 'crosshair';
   else canvas.style.cursor = 'none';
@@ -211,6 +235,12 @@ function beginStroke(pt, mods) {
     updateCanvasCursor();
     return;
   }
+  /* Con una imagen colocandose, el lienzo entero es suya: cualquier arrastre la
+   * mueve o la escala, sin importar que herramienta este elegida. Va DESPUES del
+   * paneo a proposito — navegar tiene que seguir disponible mientras se acomoda,
+   * que es justo cuando uno necesita acercarse a mirar el encaje. */
+  if (placing) { beginPlaceDrag(pt); return; }
+
   if (t === 'picker') { pickColorAt(docPt); return; }
   if (t === 'fill') { doFill(docPt); return; }
 
@@ -274,6 +304,7 @@ function moveStroke(pt, mods) {
     invalidate();
     return;
   }
+  if (placeDrag) { movePlaceDrag(pt); return; }
   if (!stroke) return;
 
   const docPt = view.toDoc(pt.x, pt.y);
@@ -343,6 +374,7 @@ function endStroke() {
     updateCanvasCursor();
     return;
   }
+  if (placeDrag) { endPlaceDrag(); return; }
   if (!stroke) return;
 
   if (stroke.path) {
@@ -408,6 +440,7 @@ function doFill(docPt) {
 }
 
 function clearLayer() {
+  commitPlacement();
   const layer = doc.active;
   if (!layer) return;
   const before = snapshotCanvas(layer);
@@ -428,6 +461,7 @@ function clearLayer() {
  * guardan referencias a los objetos Layer y no sus pixeles, deshacer un borrado
  * de capa devuelve el canvas intacto y sin costo de memoria. */
 function structural(label, fn) {
+  commitPlacement();
   const before = docState(doc);
   const result = fn();
   const after = docState(doc);
@@ -466,6 +500,7 @@ function deleteLayer() {
 }
 
 function mergeDown() {
+  commitPlacement();
   if (doc.activeIndex <= 0) { toast('Nothing below to merge into', 'merge'); return; }
   const i = doc.activeIndex;
   const bottom = doc.layers[i - 1];
@@ -551,6 +586,7 @@ function updateStatusSize() {
 
 function canvasSizeDialog() {
   if (modalOpen()) return;
+  commitPlacement();
   openCanvasSize({ doc, onApply: applyCanvasSize });
 }
 
@@ -585,6 +621,7 @@ function applyCanvasSize({ w, h, dpi, paper, anchor, scale }) {
 // ── archivos ────────────────────────────────────────────────────────────────
 
 async function exportPNG() {
+  commitPlacement();
   const flat = doc.render();
   const blob = await new Promise((r) => flat.toBlob(r, 'image/png'));
   const buf = new Uint8Array(await blob.arrayBuffer());
@@ -603,6 +640,7 @@ async function exportPNG() {
  * del documento: si por lo que sea no se corresponden, mejor una pagina del
  * tamano real que una que dice A4 y estira el dibujo para llegar. */
 async function exportPDF() {
+  commitPlacement();
   const flat = doc.render();
   const px = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height);
   const paper = doc.paper ? matchPaper(doc.width, doc.height, doc.dpi) : null;
@@ -620,6 +658,7 @@ async function exportPDF() {
 }
 
 async function copyToClipboard() {
+  commitPlacement();
   const flat = doc.render();
   const blob = await new Promise((r) => flat.toBlob(r, 'image/png'));
   const buf = new Uint8Array(await blob.arrayBuffer());
@@ -628,6 +667,7 @@ async function copyToClipboard() {
 }
 
 async function saveDoc(forceDialog = false) {
+  commitPlacement();
   const json = JSON.stringify(doc.toJSON());
   const res = await window.scrawl.file.saveDoc(
     json,
@@ -662,6 +702,9 @@ async function loadDoc(json, path) {
  * copian los campos en la instancia existente en vez de crear otra: cambiar la
  * referencia dejaria a viewport y painter apuntando al documento viejo. */
 function adoptDoc(next, path = null) {
+  /* El documento se va entero: una imagen a medio acomodar sobre el anterior no
+   * tiene donde aterrizar. */
+  endPlacement();
   doc.width = next.width;
   doc.height = next.height;
   doc.dpi = next.dpi;
@@ -696,73 +739,265 @@ function newDoc() {
   toast('New drawing', 'newDoc');
 }
 
-/* Documento intacto: una sola capa, nada dibujado, sin archivo detras y sin un
- * paso de historial. Es el estado de "abri Scrawl para anotar esta captura", y
- * el unico en el que se puede achicar el lienzo sin riesgo de recortar trabajo,
- * porque no hay nada que recortar. */
-function pristineDoc() {
-  return doc.layers.length === 1 && !docPath && !dirtyDoc && !history.canUndo;
+// ── colocar una imagen ──────────────────────────────────────────────────────
+
+/* Pegar una captura la deja FLOTANDO sobre el lienzo, a su tamano real, hasta
+ * que uno la deja donde quiere.
+ *
+ * El lienzo no se toca. Antes se acomodaba a la imagen — un documento intacto
+ * pasaba a medir exactamente la captura — y eso resolvia un solo caso: abrir la
+ * app para anotar una captura y exportar esa captura. El resto del tiempo
+ * secuestraba la hoja. Quien se armo una A4 para meter dos capturas adentro se
+ * encontraba con que la primera se llevaba puesto el documento, y sin forma de
+ * correrla ni de achicarla despues.
+ *
+ * "A tamano real" es 1:1 en pixeles del DOCUMENTO, no del tamano fisico. Un
+ * lienzo de impresion tiene mas pixeles por pulgada que la pantalla, asi que
+ * igualar los milimetros obligaria a agrandar la captura tres veces — que es
+ * exactamente el remuestreo que esto existe para no hacer. Entra sin tocar un
+ * pixel y de ahi la escala la elige la mano.
+ *
+ * Mientras flota no hay nada en el documento: ni capa, ni paso de historial. La
+ * imagen vive en el viewport, que la pinta encima del compuesto. Recien al
+ * soltarla se crea la capa y se anota el paso. Eso es lo que la deja arrastrarse
+ * a 60 fps sobre un lienzo de 2480x3508 — moviendo una capa de verdad habria que
+ * repintarla y recomponer el lienzo entero en cada frame. */
+
+/* Lo que dice la barra de estado mientras la imagen flota. Vive aparte porque
+ * hay dos caminos que lo reponen: arrancar el acomodo, y salir del modo
+ * navegacion — soltar la barra espaciadora ahi dentro no puede dejar en pantalla
+ * el consejo del pincel, que en ese momento no se puede usar. */
+const PLACE_HINT = 'Drag to move · corners to scale · Enter to place · Esc to discard';
+
+const MIN_PLACE = 16;      // lado minimo en px de documento: mas chico no se agarra
+const MAX_PLACE = 32000;   // techo duro, por si un arrastre se desboca
+
+async function placeImage(src, label) {
+  let img;
+  try {
+    img = await loadImage(src);
+  } catch {
+    URL.revokeObjectURL(src);
+    toast('That image could not be read', 'clear', 3200);
+    return;
+  }
+  startPlacement(img, label, src);
 }
 
-/* Coloca una imagen en una capa nueva. Es el camino tanto para importar un
- * archivo como para pegar una captura, que es el otro uso central de la app.
- *
- * El lienzo se acomoda a la imagen segun en que estado este el documento:
- *
- *   intacto  el lienzo pasa a medir EXACTAMENTE la imagen. Anotar una captura
- *            tiene que dar esa captura, no la captura flotando en un lienzo de
- *            otra medida: cualquier banda transparente que sobre se cuela en el
- *            PNG exportado.
- *   con algo dibujado  solo crece, y solo lo necesario para que la imagen entre
- *            sin recortarse. Achicar aca borraria pixeles del dibujo.
- *
- * La imagen entra SIEMPRE a tamano natural: el lienzo se acomoda a ella y no al
- * reves. Que la app abra en A4 no cambia nada de esto — un documento recien
- * abierto es una hoja que todavia no es nada, y pegar ahi lo convierte en la
- * captura. Lo que si se cae en ese momento es la etiqueta del papel, porque un
- * lienzo que mide 1920x1080 dejo de ser una A4 y seguir diciendolo haria que el
- * PDF saliera con una pagina A4 estirando el dibujo para llegar. */
-async function placeImage(src, label) {
-  const img = await loadImage(src);
-  /* La foto del estado va ANTES de tocar el lienzo: el tamano forma parte de lo
-   * que se restaura, asi que capturarla despues del resize haria que deshacer
-   * sacara la capa y dejara el lienzo agrandado para siempre. */
-  const before = docState(doc);
+/* Arranca el estado flotante. Si ya habia una imagen acomodandose, esa aterriza
+ * donde estaba: pegar dos veces seguidas deja las dos, no pierde la primera. */
+function startPlacement(img, label, url) {
+  commitPlacement();
 
-  const fit = pristineDoc()
-    ? { w: img.width, h: img.height }
-    : { w: Math.max(doc.width, img.width), h: Math.max(doc.height, img.height) };
+  const c = visibleCenter();
+  placing = {
+    img, label, url,
+    w: img.width,
+    h: img.height,
+    x: Math.round(c.x - img.width / 2),
+    y: Math.round(c.y - img.height / 2),
+    handle: null,
+    active: null,
+  };
+  view.placement = placing;
 
-  if (fit.w !== doc.width || fit.h !== doc.height) {
-    /* El lienzo dejo de medir la hoja, asi que ya no es esa hoja. Y cuando pasa
-     * a ser EXACTAMENTE la imagen, el documento es esa imagen: vuelve tambien a
-     * la densidad de pantalla, que es con la que se midio la captura. Sin eso,
-     * una captura anotada saldria impresa a un tercio de su tamano. */
-    doc.paper = null;
-    if (fit.w === img.width && fit.h === img.height) doc.dpi = 96;
+  ensurePlacementVisible();
+  placeBar.show();
+  view.cursor = null;
+  updateCanvasCursor();
+  hint(PLACE_HINT);
+  invalidate();
+}
 
-    doc.resize(fit.w, fit.h, 'keep');
-    painter.syncSize();
-    updateStatusSize();
-    view.fit();
-    updateZoomLabel();
+/* Centro de lo que se esta VIENDO del lienzo. Con el documento entero a la vista
+ * es su centro, que es el caso comun. Metido en un rincon al 400%, poner la
+ * captura en el centro del documento la dejaria fuera de la pantalla, y lo
+ * primero que se veria de pegar seria nada. */
+function visibleCenter() {
+  const a = view.toDoc(0, 0);
+  const b = view.toDoc(view.cssW, view.cssH);
+  const x0 = Math.max(0, a.x), x1 = Math.min(doc.width, b.x);
+  const y0 = Math.max(0, a.y), y1 = Math.min(doc.height, b.y);
+  if (x1 <= x0 || y1 <= y0) return { x: doc.width / 2, y: doc.height / 2 };
+  return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+}
+
+/* Una captura mas grande que la ventana entra con sus tiradores fuera de
+ * pantalla, y ahi no hay como achicarla: el control para hacerlo son justo las
+ * esquinas que no se ven. Cuando la caja no entra se encuadra la union de lienzo
+ * e imagen, que ademas muestra de una cuanto sobresale. */
+function ensurePlacementVisible() {
+  const r = view.placeRect;
+  const m = 36;   // aire para que los tiradores no queden pegados al borde
+  if (r.x >= m && r.y >= m && r.x + r.w <= view.cssW - m && r.y + r.h <= view.cssH - m) return;
+  const box = { x: placing.x, y: placing.y, w: placing.w, h: placing.h };
+  view.fitRect(unionRect(doc.bounds, box), 0.86);
+  updateZoomLabel();
+}
+
+function beginPlaceDrag(pt) {
+  placing.active = view.placementHitAt(pt.x, pt.y);
+  placeDrag = {
+    hit: placing.active,
+    from: view.toDoc(pt.x, pt.y),
+    rect: { x: placing.x, y: placing.y, w: placing.w, h: placing.h },
+  };
+  placeBar.setBusy(true);
+  updateCanvasCursor();
+  invalidate();
+}
+
+function movePlaceDrag(pt) {
+  const d = view.toDoc(pt.x, pt.y);
+  const r = placeDrag.rect;
+
+  if (placeDrag.hit === 'move') {
+    placing.x = r.x + (d.x - placeDrag.from.x);
+    placing.y = r.y + (d.y - placeDrag.from.y);
+  } else {
+    scalePlacement(placeDrag.hit, r, d.x - placeDrag.from.x, d.y - placeDrag.from.y);
   }
 
-  /* Centrada en lo que sobre del lienzo. Cuando el lienzo calzo con la imagen no
-   * sobra nada y esto da 0,0; los dos casos salen de la misma cuenta. Nunca es
-   * negativo: para llegar aca el lienzo ya contiene a la imagen. */
-  const dx = Math.round((doc.width - img.width) / 2);
-  const dy = Math.round((doc.height - img.height) / 2);
+  hoverPt = pt;
+  q('sc-st-pos').textContent = `${Math.round(d.x)}, ${Math.round(d.y)}`;
+  invalidate();
+}
 
-  const layer = doc.addLayer(doc.layers.length, label);
-  layer.ctx.drawImage(img, dx, dy);
+/* Escala desde la esquina OPUESTA a la que se arrastra: esa se queda clavada y
+ * la imagen crece hacia ella, que es lo que la mano espera de un tirador.
+ *
+ * Siempre proporcional, sin modificador para deformar. No hay un solo caso de
+ * esta app en el que estirar una captura sea lo que se queria, y la tecla para
+ * permitirlo seria una trampa esperando un shift accidental.
+ *
+ * El factor sale de proyectar el arrastre sobre la diagonal de la caja. Tomar un
+ * solo eje — el ancho, digamos — haria que arrastrar hacia abajo no escalara, y
+ * tomar el mayor de los dos haria saltar la escala cuando la mano cruza la
+ * diagonal. La proyeccion reparte: cada direccion escala en su proporcion. */
+function scalePlacement(hit, r, dx, dy) {
+  const west = hit === 'nw' || hit === 'sw';
+  const north = hit === 'nw' || hit === 'ne';
+
+  // la esquina ancla, en coordenadas de documento
+  const ax = west ? r.x + r.w : r.x;
+  const ay = north ? r.y + r.h : r.y;
+
+  // adonde quedo la esquina arrastrada, medida desde el ancla
+  const wantW = Math.abs((west ? r.x + dx : r.x + r.w + dx) - ax);
+  const wantH = Math.abs((north ? r.y + dy : r.y + r.h + dy) - ay);
+
+  const k = (wantW * r.w + wantH * r.h) / (r.w * r.w + r.h * r.h);
+  const lo = Math.max(MIN_PLACE / r.w, MIN_PLACE / r.h);
+  const hi = Math.min(MAX_PLACE / r.w, MAX_PLACE / r.h);
+  const f = Math.min(hi, Math.max(lo, k));
+
+  placing.w = r.w * f;
+  placing.h = r.h * f;
+  placing.x = west ? ax - placing.w : ax;
+  placing.y = north ? ay - placing.h : ay;
+}
+
+function endPlaceDrag() {
+  placeDrag = null;
+  if (placing) placing.active = null;
+  placeBar.setBusy(false);
+  updateCanvasCursor();
+  invalidate();
+}
+
+/* Empujon con las flechas, en pixeles del DOCUMENTO. Al 25% de zoom un paso de
+ * pantalla serian cuatro del documento, y entonces las flechas no servirian para
+ * lo unico que sirven: el ajuste fino de la ultima vuelta. */
+function nudgePlacement(dx, dy) {
+  placing.x += dx;
+  placing.y += dy;
+  invalidate();
+}
+
+/* Vuelta al tamano real sin moverla de donde esta: crece o se achica alrededor
+ * de su propio centro. Es el gesto del porcentaje del HUD de zoom, que tocandolo
+ * vuelve al 100%. */
+function resetPlacementScale() {
+  if (!placing) return;
+  const cx = placing.x + placing.w / 2;
+  const cy = placing.y + placing.h / 2;
+  placing.w = placing.img.width;
+  placing.h = placing.img.height;
+  placing.x = cx - placing.w / 2;
+  placing.y = cy - placing.h / 2;
+  invalidate();
+}
+
+/* Aterriza la imagen en una capa nueva. Devuelve si quedo algo colocado.
+ *
+ * Se llama tambien desde cualquier accion que no puede convivir con una imagen
+ * flotando — exportar, guardar, tocar las capas, cambiar de herramienta. Ahi lo
+ * correcto es que aterrice y no que se pierda: queda como paso de historial, asi
+ * que un Ctrl+Z la saca si no era lo que se queria.
+ *
+ * El remuestreo se hace UNA sola vez, ya escalada, directo sobre la capa. La
+ * calidad importa aca y sale gratis: es una operacion por pegado, no una por
+ * frame. */
+function commitPlacement() {
+  if (!placing) return false;
+  const p = placing;
+  const rect = {
+    x: Math.round(p.x),
+    y: Math.round(p.y),
+    w: Math.max(1, Math.round(p.w)),
+    h: Math.max(1, Math.round(p.h)),
+  };
+
+  /* Entera afuera del lienzo no queda nada que colocar, y una capa vacia con
+   * nombre de captura confunde mas que no hacer nada. */
+  const inside = clampRect(rect, doc.width, doc.height);
+  if (inside.w <= 0 || inside.h <= 0) {
+    endPlacement();
+    toast('That landed outside the canvas', 'clear', 2800);
+    return false;
+  }
+
+  const before = docState(doc);
+  const layer = doc.addLayer(doc.layers.length, p.label);
+  layer.ctx.imageSmoothingEnabled = true;
+  layer.ctx.imageSmoothingQuality = 'high';
+  layer.ctx.drawImage(p.img, rect.x, rect.y, rect.w, rect.h);
   layer.rev++;
   history.push(layersEntry(doc, before, docState(doc), 'place image'));
+
+  endPlacement();
   layersPanel.markEntering(layer.id);
   markDirty(true);
   refreshAll();
-  // el tamano lo reporta quien decodifico: es el unico que lo sabe de verdad
-  return { w: img.width, h: img.height };
+  toast(`Placed ${rect.w}×${rect.h}`, 'image');
+  return true;
+}
+
+function cancelPlacement() {
+  if (!placing) return;
+  endPlacement();
+  toast('Discarded', 'clear', 1400);
+}
+
+/* Cierra el estado flotante sin decidir nada sobre la imagen. La URL del blob se
+ * suelta aca y no apenas termina de decodificar: revocarla antes obligaria a
+ * confiar en que Chromium jamas vuelve a buscar los bytes de una imagen que ya
+ * cargo, y esta se queda en pantalla todo lo que dure el acomodo. */
+function endPlacement() {
+  if (placing?.url) URL.revokeObjectURL(placing.url);
+  placing = null;
+  placeDrag = null;
+  view.placement = null;
+  placeBar.hide();
+  updateCanvasCursor();
+  updateBrushCursor();
+  hint(hintFor(tool));
+  invalidate();
+}
+
+function syncPlaceBar() {
+  placeBar.setSize(placing.w, placing.h, placing.w / placing.img.width);
+  placeBar.place(view.placeRect, view.cssW, view.cssH);
 }
 
 async function pasteImage() {
@@ -772,27 +1007,15 @@ async function pasteImage() {
    * tal cual, que bien puede ser un JPEG de ShareX. El decodificador sniffea los
    * bytes, asi que declarar un tipo aca solo abriria la posibilidad de mentirle. */
   const blob = new Blob([new Uint8Array(res.data)]);
-  const url = URL.createObjectURL(blob);
-  try {
-    // con un archivo detras, la capa lleva su nombre en vez de un 'Pasted' mas
-    const size = await placeImage(url, res.path ? baseName(res.path) : 'Pasted');
-    toast(`Pasted ${size.w}×${size.h}`, 'clipboard');
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  // con un archivo detras, la capa lleva su nombre en vez de un 'Pasted' mas
+  await placeImage(URL.createObjectURL(blob), res.path ? baseName(res.path) : 'Pasted');
 }
 
 async function importImage() {
   const res = await window.scrawl.file.openImage();
   if (!res.ok) return;
   const blob = new Blob([new Uint8Array(res.data)]);
-  const url = URL.createObjectURL(blob);
-  try {
-    await placeImage(url, baseName(res.path));
-    toast(`Imported ${baseName(res.path)}`, 'image');
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  await placeImage(URL.createObjectURL(blob), baseName(res.path));
 }
 
 function baseName(p) {
@@ -803,6 +1026,9 @@ function baseName(p) {
 // ── undo / redo ─────────────────────────────────────────────────────────────
 
 function undo() {
+  /* Con una imagen todavia acomodandose, el ultimo paso no esta en la pila: es
+   * ella. Deshacer ahi es descartarla. */
+  if (placing) { cancelPlacement(); return; }
   if (!history.canUndo) return;
   const size = { w: doc.width, h: doc.height, dpi: doc.dpi, paper: doc.paper };
   history.undo();
@@ -871,7 +1097,7 @@ function exitNav() {
   zoomHud.classList.remove('show');
   updateCanvasCursor();
   updateBrushCursor();
-  hint(hintFor(tool));
+  hint(placing ? PLACE_HINT : hintFor(tool));
 }
 
 function togglePanels() {
@@ -929,6 +1155,30 @@ function onKeyDown(e) {
       updateBrushCursor();
     }
     return;
+  }
+
+  /* Con una imagen acomodandose el teclado es de ella: aterrizar, descartar y el
+   * empujon fino. Espacio y Alt siguen arriba porque navegar mientras se acomoda
+   * es justo lo que uno necesita para mirar el encaje de cerca. El resto de los
+   * atajos tampoco se pierde — cambiar de herramienta o exportar la hacen
+   * aterrizar primero. */
+  if (placing) {
+    if (k === 'enter') { e.preventDefault(); commitPlacement(); return; }
+    // descartar tiene las dos teclas que uno prueba: la de cancelar y la de tirar
+    if (k === 'escape' || k === 'delete' || k === 'backspace') {
+      e.preventDefault();
+      cancelPlacement();
+      return;
+    }
+    if (k.startsWith('arrow')) {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      nudgePlacement(
+        (k === 'arrowright' ? step : 0) - (k === 'arrowleft' ? step : 0),
+        (k === 'arrowdown' ? step : 0) - (k === 'arrowup' ? step : 0),
+      );
+      return;
+    }
   }
 
   if (mod) {
@@ -1007,7 +1257,7 @@ function updateBrushCursor() {
   if (!hoverPt) return;
   const t = effectiveTool();
   const brush = brushes[t];
-  if (!brush || t === 'pan' || t === 'picker' || t === 'fill') {
+  if (placing || !brush || t === 'pan' || t === 'picker' || t === 'fill') {
     view.cursor = null;
   } else {
     view.cursor = { x: hoverPt.x, y: hoverPt.y, r: (brush.size / 2) * view.scale };
@@ -1019,6 +1269,15 @@ function updateBrushCursor() {
 
 hydrateIcons();
 initTooltips();
+
+/* Va antes que el puck a proposito: son dos flotantes sobre el mismo contenedor
+ * y el orden del DOM decide cual queda arriba. El puck aparece con la mano ya en
+ * el gesto, asi que gana el. */
+const placeBar = initPlaceBar(q('sc-view'), {
+  onPlace: commitPlacement,
+  onCancel: cancelPlacement,
+  onReset: resetPlacementScale,
+});
 
 // vive adentro del contenedor del lienzo: comparte su sistema de coordenadas con
 // los puntos que entrega StrokeInput, asi el reparto entre zonas es una resta
@@ -1251,12 +1510,15 @@ const input = new StrokeInput(canvas, {
     const d = view.toDoc(pt.x, pt.y);
     q('sc-st-pos').textContent = `${Math.round(d.x)}, ${Math.round(d.y)}`;
     puck.setHover(puck.zoneAt(pt.x, pt.y));
+    // el tirador bajo el puntero se ilumina: es lo que dice que ahi se escala
+    if (placing) placing.handle = view.placementHitAt(pt.x, pt.y);
     updateCanvasCursor();
     updateBrushCursor();
   },
   leave: () => {
     hoverPt = null;
     view.cursor = null;
+    if (placing) placing.handle = null;
     puck.setHover(null);
     q('sc-st-pos').textContent = '—';
     invalidate();

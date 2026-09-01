@@ -338,14 +338,14 @@ function testHistoryBudget() {
   ok('el historial sigue siendo utilizable tras evictar', history.canUndo);
 }
 
-// ── 10. pegar una captura mas grande que el lienzo ──────────────────────────
+// ── 10. pegar una captura sin tocar el lienzo ───────────────────────────────
 
-/* Pegar una captura mas grande agranda el lienzo para no recortarla. Lo que se
- * rompe en silencio es el camino de vuelta: si el tamano no viaja en la foto del
- * estado, deshacer saca la capa y deja el lienzo estirado, sin forma de volver.
- * Y como encoger el lienzo recorta las capas, el redo tiene que devolver la
- * imagen ENTERA, no la parte que entraba en el lienzo chico. */
-function testPasteGrowsCanvas() {
+/* Pegar deja la captura flotando y el lienzo intacto: la hoja que uno se armo
+ * sigue siendo esa hoja. Lo que se rompe en silencio es el aterrizaje — que la
+ * capa nueva reciba la imagen en el rect exacto donde se la solto, que lo que
+ * sobresale se recorte sin agrandar nada, y que deshacer saque la capa dejando
+ * la medida y el papel como estaban. */
+function testPasteKeepsCanvas() {
   const doc = new ScrawlDoc(200, 150, 300);
   doc.paper = { id: 'a4', orientation: 'portrait' };
   const history = new History();
@@ -357,39 +357,54 @@ function testPasteGrowsCanvas() {
   sc.fillStyle = '#3d8fd6';
   sc.fillRect(0, 0, 320, 240);
 
-  // el mismo orden que sigue placeImage en la app
+  /* El mismo camino que sigue commitPlacement en la app: la captura se acomodo a
+   * la mitad de su tamano y se solto en 20,15. */
+  const rect = { x: 20, y: 15, w: 160, h: 120 };
   const before = docState(doc);
-  /* Adoptar la captura deja al documento midiendo pixeles de pantalla: deja de
-   * ser la hoja que era, y con ella se va la densidad de impresion. */
-  doc.paper = null;
-  doc.dpi = 96;
-  doc.resize(Math.max(doc.width, 320), Math.max(doc.height, 240), 'keep');
   const pasted = doc.addLayer(doc.layers.length, 'Pasted');
-  pasted.ctx.drawImage(shot, 0, 0);
+  pasted.ctx.drawImage(shot, rect.x, rect.y, rect.w, rect.h);
   pasted.rev++;
   history.push(layersEntry(doc, before, docState(doc), 'place image'));
 
-  ok('pegar agranda el lienzo hasta la imagen',
-    doc.width === 320 && doc.height === 240, `${doc.width}x${doc.height}`);
+  ok('pegar no toca el tamano del lienzo',
+    doc.width === 200 && doc.height === 150, `${doc.width}x${doc.height}`);
+  /* La otra mitad de lo mismo: el lienzo sigue midiendo lo que medía en PAPEL.
+   * Antes pegar lo pasaba a 96 DPI y le sacaba la hoja, porque el lienzo se
+   * volvia la captura; ahora la captura es un objeto adentro de la hoja. */
+  ok('pegar no se lleva puesta la hoja ni la densidad',
+    doc.dpi === 300 && doc.paper?.id === 'a4',
+    `dpi=${doc.dpi} paper=${JSON.stringify(doc.paper)}`);
   ok('pegar deja la imagen en una capa nueva', doc.layers.length === 2);
-  ok('la esquina lejana de la captura entra en el lienzo', px(pasted, 310, 230).a === 255);
+  ok('la imagen queda donde se la solto',
+    px(pasted, 21, 16).a === 255 && px(pasted, 178, 133).a === 255);
+  ok('afuera del rect no queda nada pintado',
+    px(pasted, 18, 13).a === 0 && px(pasted, 182, 137).a === 0);
 
   history.undo();
   ok('undo del pegado saca la capa', doc.layers.length === 1);
-  ok('undo del pegado devuelve el lienzo a su tamano',
-    doc.width === 200 && doc.height === 150, `${doc.width}x${doc.height}`);
-  /* El tamano sin la densidad no alcanza: el lienzo volveria a medir lo mismo en
-   * pixeles pero otra cosa en papel, y el PDF saldria de otra hoja. */
-  ok('undo del pegado devuelve tambien la hoja y la densidad',
-    doc.dpi === 300 && doc.paper?.id === 'a4',
-    `dpi=${doc.dpi} paper=${JSON.stringify(doc.paper)}`);
+  ok('undo del pegado deja el lienzo como estaba',
+    doc.width === 200 && doc.height === 150 && doc.dpi === 300,
+    `${doc.width}x${doc.height} @${doc.dpi}`);
 
   history.redo();
-  ok('redo del pegado vuelve a agrandar el lienzo',
-    doc.width === 320 && doc.height === 240, `${doc.width}x${doc.height}`);
-  ok('redo devuelve la imagen entera, sin recorte del lienzo chico',
-    px(doc.layers[1], 310, 230).a === 255,
-    `alpha en 310,230 = ${px(doc.layers[1], 310, 230).a}`);
+  ok('redo del pegado devuelve la capa con su imagen',
+    doc.layers.length === 2 && px(doc.layers[1], 178, 133).a === 255);
+
+  /* Una captura mas grande que el lienzo ya no lo agranda: sobresale mientras se
+   * acomoda y lo que quedo afuera se pierde al soltar. Es la contracara de que
+   * el lienzo mande — el encuadre lo elige la mano antes, no la app despues. */
+  const big = { x: -40, y: -30, w: 320, h: 240 };
+  const inside = clampRect(big, doc.width, doc.height);
+  ok('lo que sobresale del lienzo se recorta',
+    inside.x === 0 && inside.y === 0 && inside.w === 200 && inside.h === 150,
+    JSON.stringify(inside));
+
+  const over = doc.addLayer(doc.layers.length, 'Big');
+  over.ctx.drawImage(shot, big.x, big.y, big.w, big.h);
+  ok('una captura mas grande no agranda el lienzo',
+    doc.width === 200 && doc.height === 150, `${doc.width}x${doc.height}`);
+  ok('de la captura que sobresale entra lo que cabe',
+    px(over, 0, 0).a === 255 && px(over, 199, 149).a === 255);
 }
 
 // ── 11. exportar a PDF ──────────────────────────────────────────────────────
@@ -656,7 +671,7 @@ async function run() {
     ['capas', testLayers],
     ['guardar / abrir', testRoundTrip],
     ['presupuesto del historial', testHistoryBudget],
-    ['pegar una captura grande', testPasteGrowsCanvas],
+    ['pegar sin tocar el lienzo', testPasteKeepsCanvas],
     ['exportar PDF', testPDF],
     ['exportar PDF con alfa', testPDFAlpha],
     ['tamanos de papel', testPaper],

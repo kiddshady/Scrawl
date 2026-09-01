@@ -11,6 +11,14 @@ const ZOOM_STEP = 1.25;
 const ZOOM_MIN = 0.02;
 const ZOOM_MAX = 32;
 
+/* Tiradores de la imagen que se esta colocando. Miden lo mismo en pantalla a
+ * cualquier zoom: son controles del puntero, no parte del dibujo. Si escalaran
+ * con el documento, al 20% serian invisibles y al 800% cubririan la imagen. El
+ * area de agarre es mas grande que lo pintado — con lapiz uno apunta al cuadrado
+ * que ve y le erra por dos o tres pixeles. */
+const HANDLE = 11;
+const HANDLE_HIT = 20;
+
 export class Viewport {
   constructor(canvas, doc) {
     this.canvas = canvas;
@@ -27,6 +35,12 @@ export class Viewport {
 
     // cursor del pincel: se dibuja como anillo en la posicion del puntero
     this.cursor = null;   // { x, y, r } en coordenadas de pantalla (css px)
+
+    /* Imagen flotando sobre el lienzo mientras se la acomoda, o null, que es lo
+     * normal. Es { img, x, y, w, h, handle, active } en coordenadas de
+     * DOCUMENTO: el viewport la pinta y resuelve su geometria en pantalla, pero
+     * quien la mueve es app.js. */
+    this.placement = null;
 
     this.#buildChecker();
   }
@@ -87,17 +101,42 @@ export class Viewport {
     };
   }
 
-  // ── navegacion ────────────────────────────────────────────────────────────
-
-  fit(margin = 0.94) {
-    const s = Math.min(this.cssW / this.doc.width, this.cssH / this.doc.height) * margin;
-    this.scale = clamp(s, ZOOM_MIN, ZOOM_MAX);
-    this.center();
+  /* Rect de la imagen que se esta colocando, en pixeles de pantalla. */
+  get placeRect() {
+    const p = this.placement;
+    if (!p) return null;
+    const a = this.toScreen(p.x, p.y);
+    return { x: a.x, y: a.y, w: p.w * this.scale, h: p.h * this.scale };
   }
 
-  center() {
-    this.tx = (this.cssW - this.doc.width * this.scale) / 2;
-    this.ty = (this.cssH - this.doc.height * this.scale) / 2;
+  /* Que agarra un punto de pantalla: 'nw' | 'ne' | 'se' | 'sw' cuando cae sobre
+   * un tirador, 'move' en cualquier otro lado, null si no hay nada colocandose.
+   *
+   * Afuera de la caja tambien devuelve 'move' a proposito. Una zona muerta
+   * alrededor solo serviria para que un arrastre que empezo dos pixeles afuera
+   * no haga nada, y en una app de tablet ese error se comete todo el tiempo. */
+  placementHitAt(sx, sy) {
+    const r = this.placeRect;
+    if (!r) return null;
+    for (const [id, hx, hy] of corners(r)) {
+      if (Math.abs(sx - hx) <= HANDLE_HIT / 2 && Math.abs(sy - hy) <= HANDLE_HIT / 2) return id;
+    }
+    return 'move';
+  }
+
+  // ── navegacion ────────────────────────────────────────────────────────────
+
+  fit(margin = 0.94) { this.fitRect(this.doc.bounds, margin); }
+
+  /* Encaja un rect del DOCUMENTO en la ventana y lo centra. El lienzo entero es
+   * el caso comun, pero pegar una captura mas grande que el lienzo necesita
+   * encuadrar la union de los dos: si la caja de la imagen cae afuera de la
+   * ventana, sus tiradores quedan fuera de alcance y no hay como achicarla. */
+  fitRect(r, margin = 0.94) {
+    const s = Math.min(this.cssW / r.w, this.cssH / r.h) * margin;
+    this.scale = clamp(s, ZOOM_MIN, ZOOM_MAX);
+    this.tx = this.cssW / 2 - (r.x + r.w / 2) * this.scale;
+    this.ty = this.cssH / 2 - (r.y + r.h / 2) * this.scale;
   }
 
   /* Zoom manteniendo fijo el punto del documento que esta bajo (ax, ay). Es lo
@@ -161,7 +200,63 @@ export class Viewport {
     c.lineWidth = 1;
     c.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
 
+    if (this.placement) this.#drawPlacement();
     if (this.cursor) this.#drawCursor();
+  }
+
+  /* La imagen que todavia no aterrizo, con su caja y sus cuatro tiradores.
+   *
+   * Se dibuja DOS veces: una entera y fantasma, otra recortada al lienzo y
+   * opaca. Lo que sobresale del lienzo es justo lo que se va a perder al
+   * soltar, asi que mostrarlo apagado es la unica forma de decidir el encuadre
+   * — recortarlo de una obligaria a adivinar cuanto quedo afuera. La opaca va
+   * encima, asi que adentro del lienzo la imagen se ve tal cual va a quedar. */
+  #drawPlacement() {
+    const p = this.placement;
+    const r = this.placeRect;
+    const doc = this.docRect;
+    const c = this.ctx;
+
+    /* El suavizado se decide por el aumento REAL de los pixeles de origen, que
+     * con una imagen escalada no es el zoom: una captura al 40% vista al 300%
+     * sigue mostrando cada pixel de origen mas chico que uno de pantalla. */
+    const mag = r.w / p.img.width;
+
+    c.save();
+    c.globalAlpha = .28;
+    c.imageSmoothingEnabled = mag < 2.5;
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(p.img, r.x, r.y, r.w, r.h);
+    c.restore();
+
+    c.save();
+    c.beginPath();
+    c.rect(doc.x, doc.y, doc.w, doc.h);
+    c.clip();
+    c.imageSmoothingEnabled = mag < 2.5;
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(p.img, r.x, r.y, r.w, r.h);
+    c.restore();
+
+    /* Caja de doble trazo, igual que el anillo del pincel: una captura puede ser
+     * blanca o negra y un contorno de un solo color desaparece en la mitad de
+     * los casos. */
+    c.lineWidth = 1;
+    c.strokeStyle = 'rgba(0,0,0,.55)';
+    c.strokeRect(r.x - .5, r.y - .5, r.w + 1, r.h + 1);
+    c.strokeStyle = 'rgba(255,255,255,.85)';
+    c.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+
+    for (const [id, hx, hy] of corners(r)) {
+      const on = p.active ? p.active === id : p.handle === id;
+      c.beginPath();
+      c.roundRect(hx - HANDLE / 2, hy - HANDLE / 2, HANDLE, HANDLE, 2);
+      c.fillStyle = on ? '#e0a04a' : '#e8e8e8';
+      c.fill();
+      c.lineWidth = 1;
+      c.strokeStyle = 'rgba(0,0,0,.75)';
+      c.stroke();
+    }
   }
 
   /* Anillo del tamano real del pincel. Doble trazo (oscuro afuera, claro
@@ -189,6 +284,18 @@ export class Viewport {
     c.arc(x, y, r, 0, Math.PI * 2);
     c.stroke();
   }
+}
+
+/* Las cuatro esquinas de un rect de pantalla, con su nombre cardinal. El nombre
+ * es lo que despues dice cual es la esquina ANCLA — la opuesta, la que no se
+ * mueve mientras se escala. */
+function corners(r) {
+  return [
+    ['nw', r.x, r.y],
+    ['ne', r.x + r.w, r.y],
+    ['se', r.x + r.w, r.y + r.h],
+    ['sw', r.x, r.y + r.h],
+  ];
 }
 
 function cross(c, x, y, s) {

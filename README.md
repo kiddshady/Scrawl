@@ -40,7 +40,9 @@ npm start
 | `Ctrl+Shift+N` `Ctrl+J` `Ctrl+E` | Capa nueva, duplicar, aplastar |
 | `Ctrl+S` `Ctrl+O` `Ctrl+Shift+E` | Guardar `.scrawl`, abrir, exportar PNG |
 | `Ctrl+Shift+P` | Exportar PDF |
-| `Ctrl+V` | Pegar una captura del portapapeles como capa nueva |
+| `Ctrl+V` | Pegar una captura del portapapeles, a tamaño real, para acomodarla |
+| `Enter` / `Esc` | Dejar caer la captura que se está acomodando / descartarla |
+| Flechas | Empujarla de a un píxel (con `Shift`, de a diez) |
 | `Ctrl+Alt+C` | Tamaño del lienzo (también clickeando la medida en la barra de estado) |
 
 ## Tamaño de impresión
@@ -68,18 +70,31 @@ historial se queda con los canvas que el redimensionado descartó, así que no c
 una sola copia. Y `Ctrl+N` hereda la medida, porque quien se armó una A4 quiere la
 siguiente hoja igual.
 
-**El pegado sigue mandando sobre el lienzo, esté en A4 o no.** Sobre un documento
-intacto, pegar lo ajusta al tamaño exacto de la captura — anotar una captura tiene
-que exportar esa captura, no la captura flotando en un lienzo de otra medida — y con
-algo ya dibujado el lienzo solo crece, lo justo para que la imagen entre sin
-recortarse. La imagen entra siempre a tamaño natural; el lienzo se acomoda a ella y
-no al revés.
+**La captura entra a tamaño real y se acomoda antes de aterrizar.** Pegar no toca
+el lienzo: la imagen queda flotando encima, 1:1 en píxeles del documento, con una
+caja de cuatro tiradores. Se arrastra a donde vaya, se escala desde las esquinas —
+siempre proporcional, una captura estirada es una captura arruinada — y recién
+entonces `Enter` la deja caer en una capa nueva. `Esc` la descarta sin dejar rastro,
+y `Ctrl+Z` deshace el aterrizaje. La barrita que cuelga de la caja dice cuánto mide y
+a qué escala quedó; tocando ese número vuelve al 100%.
 
-Lo que sí se cae en ese momento es la etiqueta del papel: un lienzo que mide
-1920×1080 dejó de ser una A4, y seguir diciéndolo haría que el PDF saliera con una
-página A4 estirando el dibujo para llegar. Cuando el lienzo pasa a ser exactamente la
-imagen, el documento vuelve además a los 96 DPI de pantalla, que es con los que se
-midió la captura. Deshacer devuelve las dos cosas junto con los píxeles.
+Lo que sobresale del lienzo se dibuja apagado mientras se acomoda: es exactamente lo
+que se va a perder al soltar, y verlo es la única forma de decidir el encuadre. Si la
+caja no entra en la ventana, la vista se aleja sola hasta que entre — sus tiradores
+son el único control para achicarla, y fuera de pantalla no sirven.
+
+"A tamaño real" es 1:1 en píxeles del **documento**, no en milímetros. Un lienzo de
+impresión tiene más píxeles por pulgada que la pantalla, así que igualar el tamaño
+físico obligaría a agrandar la captura tres veces — justo el remuestreo que esto
+existe para no hacer. Entra sin tocar un píxel y de ahí la escala la elige la mano.
+
+Antes de esto el lienzo se acomodaba a la imagen: sobre un documento intacto, pegar
+lo dejaba midiendo la captura exacta. Resolvía un solo caso — abrir la app para
+anotar una captura y exportar esa captura — y el resto del tiempo secuestraba la
+hoja: quien se armó una A4 para meter dos capturas adentro se encontraba con que la
+primera se llevaba puesto el documento, sin forma de correrla ni de achicarla
+después. Ahora la A4 sigue siendo una A4, con su densidad y su etiqueta intactas, y
+la captura es un objeto adentro de la hoja.
 
 Pegar acepta las dos formas en que un capturador deja una captura: los píxeles, o la
 ruta del archivo que guardó. ShareX viene configurado de fábrica para lo segundo, y
