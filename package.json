@@ -1,6 +1,6 @@
 {
   "name": "scrawl",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Scrawl — draw and mark up, straight from the tablet.",
   "main": "main.js",
   "author": "Kidd_Shady",
