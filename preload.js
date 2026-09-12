@@ -23,6 +23,14 @@ contextBridge.exposeInMainWorld('scrawl', {
     // otro documento en otra ventana, con la medida que se le pase
     newWindow: (seedFor) => ipcRenderer.send('window:new', seedFor),
     seed,
+    /* Cerrar con cambios sin guardar: el principal frena el cierre y pregunta
+     * por aca; la ventana contesta con confirmClose cuando guardo o descarto. */
+    onConfirmClose: (fn) => {
+      const handler = () => fn();
+      ipcRenderer.on('window:confirm-close', handler);
+      return () => ipcRenderer.off('window:confirm-close', handler);
+    },
+    confirmClose: () => ipcRenderer.send('window:close-confirmed'),
     // el titlebar propio necesita seguir el estado para cambiar su icono
     onState: (fn) => {
       const handler = (_e, state) => fn(state);

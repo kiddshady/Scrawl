@@ -34,6 +34,7 @@ import { initLayers } from './ui/layers.js';
 import { initBrushPanel } from './ui/brushpanel.js';
 import { initPuck } from './ui/puck.js';
 import { initPlaceBar } from './ui/placebar.js';
+import { initCloseGuard } from './ui/closeguard.js';
 
 const q = (id) => document.getElementById(id);
 
@@ -772,6 +773,8 @@ async function copyLayer() {
   toast(`Copied “${layer.name}” · ${b.w}×${b.h}`, 'clipboard');
 }
 
+/* Devuelve si quedo guardado: quien pregunta "guardar antes de cerrar" — o de
+ * reiniciar — necesita saber si el dialogo de archivo se cancelo. */
 async function saveDoc(forceDialog = false) {
   commitPlacement();
   const json = JSON.stringify(doc.toJSON());
@@ -780,11 +783,12 @@ async function saveDoc(forceDialog = false) {
     docPath ? baseName(docPath) + '.scrawl' : 'untitled.scrawl',
     forceDialog ? null : docPath,
   );
-  if (!res.ok) return;
+  if (!res.ok) return false;
   docPath = res.path;
   setDocName(res.path);
   markDirty(false);
   toast(`Saved ${baseName(res.path)}`, 'save');
+  return true;
 }
 
 async function openDoc() {
@@ -852,6 +856,13 @@ function newDoc() {
  * que Ctrl+N. */
 function newWindow() {
   window.scrawl.win.newWindow({ w: doc.width, h: doc.height, dpi: doc.dpi, paper: doc.paper });
+}
+
+/* Cierra ESTA ventana por el mismo camino que la X: si hay cambios sin guardar,
+ * el principal frena y pregunta (ver ui/closeguard.js). Antes Ctrl+W cerraba
+ * igual — lo hacia el menu por defecto de Electron, sin preguntar nada. */
+function closeWindow() {
+  window.scrawl.win.close();
 }
 
 // ── colocar una imagen ──────────────────────────────────────────────────────
@@ -1340,8 +1351,14 @@ function onKeyDown(e) {
         return;
       // la tecla de "otra pestana" de cualquier navegador: aca es otra ventana
       case 't': e.preventDefault(); newWindow(); return;
+      case 'w': e.preventDefault(); closeWindow(); return;
       case '0': e.preventDefault(); fitView(); return;
       case '1': e.preventDefault(); resetZoom(); return;
+      /* Con Ctrl, las mismas teclas de zoom que sin el. Hasta que se saco el
+       * menu por defecto de Electron, Ctrl+Plus agrandaba la INTERFAZ entera —
+       * y Chromium se lo acordaba entre sesiones. */
+      case '+': case '=': e.preventDefault(); view.zoomIn(); updateZoomLabel(); invalidate(); return;
+      case '-': e.preventDefault(); view.zoomOut(); updateZoomLabel(); invalidate(); return;
       default: return;
     }
   }
@@ -1479,6 +1496,13 @@ const updater = initUpdate({
   save: () => saveDoc(false),
 });
 
+// cerrar la ventana con cambios sin guardar pregunta primero; necesita lo mismo
+initCloseGuard({
+  isDirty: () => dirtyDoc,
+  docName: () => (docPath ? baseName(docPath) : 'Untitled'),
+  save: () => saveDoc(false),
+});
+
 initTitlebar({
   isEnabled: (action) => {
     if (action === 'undo') return history.canUndo;
@@ -1494,6 +1518,7 @@ initTitlebar({
       { label: 'Open…', action: 'openDoc', key: 'Ctrl+O', icon: 'open' },
       { label: 'Save', action: 'save', key: 'Ctrl+S', icon: 'save' },
       { label: 'Save As…', action: 'saveAs', key: 'Ctrl+Shift+S', icon: 'save' },
+      { label: 'Close Window', action: 'closeWindow', key: 'Ctrl+W', icon: 'winClose' },
       { rule: true },
       { label: 'Import Image…', action: 'importImage', icon: 'image' },
       { label: 'Paste from Clipboard', action: 'paste', key: 'Ctrl+V', icon: 'clipboard' },
@@ -1529,7 +1554,7 @@ initTitlebar({
     ],
   },
   onAction: (action) => ({
-    newDoc, newWindow, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
+    newDoc, newWindow, closeWindow, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
     importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard, copyLayer,
     checkUpdates: () => updater.checkNow(),
     undo, redo, clearLayer, canvasSize: canvasSizeDialog,

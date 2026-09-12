@@ -35,7 +35,7 @@ ventana; `box` imprime el rectángulo del lienzo para apuntar adentro.
 
 | comando | qué hace |
 |---|---|
-| `launch` | abre la app y espera `#sc-app.ready` + 1.2s de asentamiento |
+| `launch [ruta.scrawl]` | abre la app y espera `#sc-app.ready` + 1.2s de asentamiento; con una ruta, abre ese dibujo (la única forma de tener un documento CON ruta sin el diálogo nativo) |
 | `ss [nombre]` | captura → `.shots/<nombre>.png` |
 | `box` | rectángulo del lienzo `#sc-canvas` |
 | `wins` / `win <n>` | lista las ventanas abiertas / apunta los demás comandos a la n-ésima (0 = la primera; espera su `ready`) |
@@ -47,6 +47,7 @@ ventana; `box` imprime el rectángulo del lienzo para apuntar adentro.
 | `pos` | posición del puntero en coords de documento (`#sc-st-pos`) |
 | `click <sel>` / `press <tecla>` / `type <texto>` | DOM click / teclado |
 | `text [sel]` / `eval <js>` | leer texto / evaluar en la página |
+| `evalmain <js>` | evaluar en el proceso principal, con `app`, `BrowserWindow`, `Menu`, `clipboard` a mano — `BrowserWindow.getAllWindows()[0].close()` es el camino de Alt+F4 y la barra de tareas |
 | `quit` | cierra la app y sale |
 
 ## Gotchas (todos pasaron de verdad)
@@ -68,6 +69,26 @@ ventana; `box` imprime el rectángulo del lienzo para apuntar adentro.
   mismo tamaño, o maximizada si aquella lo estaba.
 - **Teclear justo después de cerrar un modal**: el velo tarda en irse y se come
   el atajo o el trazo. Un `wait 400` después de `Apply` lo resuelve.
+- **Los aceleradores nativos no se pueden probar con `press`**: el teclado de
+  CDP entra directo a la página y se saltea la tabla de aceleradores del menú.
+  Por eso `press Control+r` nunca recargó ni con el menú por defecto puesto — la
+  prueba de que ya no hay menú es `evalmain Menu.getApplicationMenu() === null`.
+  Fuera de `--dev` la app no tiene menú de aplicación.
+- **Cerrar una ventana sucia pregunta**: `press Control+w` o un `close()` desde
+  `evalmain` abren el modal "Unsaved changes" en vez de cerrar. Los botones son
+  `.sc-modal .sc-btn--danger` (Don't save), `.sc-btn--ghost` (Cancel) y
+  `.sc-btn--primary` (Save). Con la última ventana cerrada la app termina y los
+  comandos siguientes fallan con "Target page ... has been closed": es la señal
+  de que cerró, no un error.
+- **Los diálogos nativos de archivo no se manejan**: para probar guardar,
+  `launch` con una ruta; ahí Ctrl+S y el "Save" del cierre escriben en silencio.
+- **`quit` destruye las ventanas antes de cerrar**: `app.close()` es un
+  `app.quit()`, y con una ventana sucia el guard lo frena — la pregunta queda
+  abierta y el driver se cuelga esperando. Por eso `quit` hace `destroy()`
+  primero. Si un script se cuelga en `quit`, es esto.
+- **`grep` sobre la salida del driver la bufferiza**: por pipe no es TTY, así que
+  no se ve nada hasta que termina. Con `grep --line-buffered` (o sin grep) la
+  salida va llegando.
 - **Señal de listo**: `boot()` pone la clase `ready` en `#sc-app`; después
   quedan el fade del splash y el reposicionamiento de la ventana (nace
   off-screen en -20000 y se mueve a los 200ms). El driver ya espera todo eso.

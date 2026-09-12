@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, ipcMain, dialog, protocol, screen, clipboard, nativeImage, shell,
+  app, BrowserWindow, Menu, ipcMain, dialog, protocol, screen, clipboard, nativeImage, shell,
 } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
@@ -126,11 +126,15 @@ function focusedWin() {
   return null;
 }
 
-/* Ventanas con trabajo sin guardar. Lo reporta cada renderer al cambiar: el
- * principal lo necesita para no reiniciar la app por una actualizacion cuando
- * OTRA ventana — que el dialogo que pidio reiniciar no ve — tiene un dibujo a
- * medio hacer. */
+/* Ventanas con trabajo sin guardar. Lo reporta cada renderer al cambiar. Es lo
+ * que decide si cerrar una ventana pregunta antes, y lo que frena un reinicio
+ * por actualizacion cuando OTRA ventana — que el dialogo que pidio reiniciar no
+ * ve — tiene un dibujo a medio hacer. */
 const dirtyWins = new WeakSet();
+
+/* Ventanas que ya contestaron la pregunta de cerrar (o a las que nadie tiene que
+ * preguntarle mas): la proxima vez que se cierren, se cierran. */
+const closeApproved = new WeakSet();
 
 /* Ruta de un .scrawl pasada por linea de comandos: es como Windows entrega el
  * archivo al hacer doble clic, una vez registrada la asociacion. */
@@ -227,6 +231,27 @@ function createWindow({ opener = null, seed = null } = {}) {
     windows.delete(win);
     if (lastFocused === win) lastFocused = null;
   });
+
+  /* Cerrar con trabajo sin guardar pregunta antes. Todos los caminos pasan por
+   * aca — la X de la barra propia, Alt+F4, la barra de tareas, Ctrl+W, cerrar
+   * todas al reiniciar — asi que es el unico lugar donde hace falta frenar. El
+   * renderer muestra el dialogo (es el que sabe como guardar) y contesta por
+   * 'window:close-confirmed'; hasta entonces la ventana se queda. Un dibujo
+   * limpio se cierra sin preguntar, como siempre. */
+  win.on('close', (e) => {
+    if (closeApproved.has(win) || !dirtyWins.has(win)) return;
+    e.preventDefault();
+    win.webContents.send('window:confirm-close');
+  });
+  /* Sin renderer no hay quien conteste ni nada que guardar: una ventana cuyo
+   * proceso se cayo tiene que poder cerrarse, o queda clavada para siempre. */
+  win.webContents.on('render-process-gone', () => dirtyWins.delete(win));
+
+  /* El zoom de PAGINA — el de la interfaz entera, no el del lienzo — arranca en
+   * 1 siempre. Chromium lo recuerda por origen entre sesiones, y hasta que se
+   * saco el menu por defecto un Ctrl+Plus accidental lo cambiaba sin que nada en
+   * la app pudiera volverlo: una interfaz agrandada se quedaba asi para siempre. */
+  win.webContents.on('did-finish-load', () => win.webContents.setZoomFactor(1));
 
   if (SELFTEST) {
     win.loadURL('scrawl://app/selftest.html');
@@ -376,6 +401,13 @@ if (!gotLock) {
 
   // 'screen' recien existe despues de whenReady, de ahi que el centrado viva adentro.
   app.whenReady().then(() => {
+    /* Sin menu de aplicacion. La ventana no tiene frame, asi que nunca se vio,
+     * pero el menu POR DEFECTO de Electron existia igual y sus aceleradores
+     * llegaban: Ctrl+R recargaba la pagina — el dibujo entero, sin undo ni
+     * aviso —, Ctrl+W cerraba sin preguntar, Ctrl+Plus agrandaba la interfaz,
+     * F11, Ctrl+M, Ctrl+Shift+I. Lo que la app quiere de esas teclas lo maneja
+     * el renderer. En --dev se conserva: recargar y abrir DevTools sirven ahi. */
+    if (!DEV) Menu.setApplicationMenu(null);
     registerProtocol();
     createWindow();
     initUpdates();
@@ -400,6 +432,13 @@ ipcMain.on('window:toggle-maximize', (e) => {
   else win.maximize();
 });
 ipcMain.on('window:close', (e) => senderWin(e)?.close());
+// la respuesta al dialogo de cerrar: guardado, o descartado a proposito
+ipcMain.on('window:close-confirmed', (e) => {
+  const win = senderWin(e);
+  if (!win) return;
+  closeApproved.add(win);
+  win.close();
+});
 ipcMain.handle('window:is-maximized', (e) => senderWin(e)?.isMaximized() ?? false);
 
 /* Otra ventana, o sea otro documento abierto a la vez. Es la forma de tener dos
@@ -722,6 +761,10 @@ ipcMain.handle('update:install', (e) => {
   for (const w of windows) {
     if (w !== me && !w.isDestroyed() && dirtyWins.has(w)) return { ok: false, reason: 'other-dirty' };
   }
+  /* Reiniciar cierra todas las ventanas, y la unica que puede tener trabajo sin
+   * guardar es la que pidio — y ya eligio "Restart anyway". Sin esto, su propio
+   * guard de cierre frenaria el reinicio con el instalador ya lanzado. */
+  for (const w of windows) closeApproved.add(w);
   /* Silencioso y volviendo a abrir sola: la actualizacion es un tramite, no una
    * visita al instalador. Si el modo silencioso no prosperara, autoInstallOnAppQuit
    * sigue en pie y el instalador aparece al cerrar. */

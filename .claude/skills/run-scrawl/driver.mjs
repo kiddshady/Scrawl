@@ -34,12 +34,18 @@ const need = () => { if (!page) { console.log('ERROR: primero launch'); return t
 const n = (v) => parseFloat(v);
 
 const COMMANDS = {
-  async launch() {
+  /* `launch [ruta.scrawl]`: con una ruta, la app abre ese dibujo como si se lo
+   * hubiera hecho doble clic — es la unica forma de tener un documento CON ruta
+   * sin pasar por el dialogo nativo de archivos, que el driver no puede manejar.
+   * Sirve para probar lo que guarda en silencio (Ctrl+S, "Save" al cerrar). */
+  async launch(file) {
     if (app) return console.log('ya lanzado');
+    const args = [APP_DIR];
+    if (file && file.trim()) args.push(path.resolve(file.trim()));
     app = await electron.launch({
       executablePath: path.join(APP_DIR, 'node_modules/electron/dist',
         process.platform === 'win32' ? 'electron.exe' : 'electron'),
-      args: [APP_DIR],
+      args,
       env,
       timeout: 30_000,
     });
@@ -176,8 +182,35 @@ const COMMANDS = {
     catch (e) { console.log('ERROR:', e.message.split('\n')[0]); }
   },
 
+  /* Lo mismo, pero en el proceso PRINCIPAL, con `app`, `BrowserWindow`, `Menu` y
+   * `clipboard` a mano. Es como se dispara lo que el teclado sintetico no puede:
+   * un cierre por Alt+F4 o por la barra de tareas es `win.close()` desde aca, y
+   * asi pasa por el mismo camino que en la vida real. */
+  async evalmain(expr) {
+    if (!app) return console.log('ERROR: primero launch');
+    try {
+      const out = await app.evaluate(({ app, BrowserWindow, Menu, clipboard }, code) => {
+        // eslint-disable-next-line no-eval
+        const value = eval(code);
+        // lo que no serializa (una ventana, un menu) se describe en vez de fallar
+        try { JSON.stringify(value); return value; } catch { return String(value); }
+      }, expr);
+      console.log(JSON.stringify(out));
+    } catch (e) { console.log('ERROR:', e.message.split('\n')[0]); }
+  },
+
+  /* Las ventanas se DESTRUYEN antes de cerrar la app: app.close() es un
+   * app.quit(), y con un dibujo sin guardar el guard de cierre lo frena — la
+   * pregunta queda abierta en una ventana que nadie va a contestar y el driver
+   * se cuelga esperando que el proceso termine. destroy() se saltea el evento
+   * 'close', que es justo lo que un arnes que termina quiere. */
   async quit() {
-    if (app) await app.close().catch(() => {});
+    if (app) {
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const w of BrowserWindow.getAllWindows()) w.destroy();
+      }).catch(() => {});
+      await app.close().catch(() => {});
+    }
     app = null; page = null;
   },
 

@@ -135,8 +135,8 @@ export function initUpdate({ isDirty, save }) {
       if (dirty) {
         dialog.button('Restart anyway', 'ghost', install);
         dialog.button('Save and restart', 'primary', async (close) => {
-          await save();
-          install(close);
+          // guardar cancelado es no guardar: reiniciar igual perderia el dibujo
+          if (await save()) install(close);
         });
       } else {
         dialog.button('Later', 'ghost', (close) => close());

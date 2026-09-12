@@ -35,13 +35,13 @@ npm start
 | `X` | Alternar con el color anterior |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Deshacer / rehacer |
 | `Del` | Vaciar la capa |
-| Rueda | Zoom · `Ctrl+0` encajar · `Ctrl+1` al 100% |
+| Rueda | Zoom (también `+` `-`, con o sin `Ctrl`) · `Ctrl+0` encajar · `Ctrl+1` al 100% |
 | `Tab` | Ocultar los paneles |
 | `Ctrl+Shift+N` `Ctrl+J` `Ctrl+E` | Capa nueva, duplicar, aplastar |
 | `Ctrl+S` `Ctrl+O` `Ctrl+Shift+E` | Guardar `.scrawl`, abrir, exportar PNG |
 | `Ctrl+Shift+P` | Exportar PDF |
 | `Ctrl+V` | Pegar una captura del portapapeles, a tamaño real, para acomodarla |
-| `Ctrl+T` | Otra ventana: un segundo dibujo abierto a la vez, con la misma hoja |
+| `Ctrl+T` `Ctrl+W` | Otra ventana (un segundo dibujo abierto a la vez, con la misma hoja) / cerrar esta — preguntando si hay cambios sin guardar |
 | `Ctrl+Shift+C` | Copiar la capa activa, para pegarla como capa en otro dibujo (o en este) |
 | `Enter` / `Esc` | Dejar caer la captura que se está acomodando / descartarla |
 | Flechas | Empujarla de a un píxel (con `Shift`, de a diez) |
@@ -155,6 +155,32 @@ mismo que hacía con una: entra en la última que tuvo foco, reemplazando el
 dibujo que hubiera ahí. Y reiniciar para actualizar cierra todas, así que si
 otra ventana tiene trabajo sin guardar, la app no reinicia y lo dice.
 
+## Cerrar sin perder nada
+
+Cerrar una ventana con un dibujo sin guardar **pregunta**: *Save*, *Don't save*
+o *Cancel*. Vale para todos los caminos — la X de la barra, `Alt+F4`, `Ctrl+W`,
+la barra de tareas, reiniciar para actualizar — porque el que frena es el
+proceso principal, que es el único que los ve todos; la ventana solo pone el
+diálogo y contesta. Un dibujo limpio se cierra sin preguntar, como siempre. En
+el diálogo *Don't save* va apartado a la izquierda, lejos de *Save*: descartar
+un dibujo no puede estar a un píxel de guardarlo. `Enter` guarda, `Esc` cancela,
+y si el diálogo de archivo se cancela la ventana se queda abierta.
+
+Lo que motivó esto fue el miedo a cerrar la app por accidente durante un
+parcial, y al mirar por dónde se podía cerrar apareció algo peor. La ventana no
+tiene frame, así que nunca se vio un menú, pero **el menú por defecto de
+Electron existía igual** y sus aceleradores llegaban: `Ctrl+R` recargaba la
+página — el dibujo entero, sin undo ni aviso —, `Ctrl+W` cerraba sin preguntar,
+`Ctrl+M` minimizaba, `F11` pantalla completa, `Ctrl+Shift+I` DevTools. Y
+`Ctrl+Plus` / `Ctrl+Minus` hacían zoom de la **interfaz**, no del lienzo;
+Chromium se lo acuerda por origen entre sesiones y `Ctrl+0` no lo revertía
+porque la app lo usa para encajar el lienzo, así que un toque accidental dejaba
+la UI agrandada para siempre. Ese menú ya no está (salvo con `--dev`, donde
+recargar y abrir DevTools sirven), el zoom de página se fuerza a 1 al cargar por
+si ya había quedado pegado, y lo que la app quiere de esas teclas lo maneja
+ella: `Ctrl+W` cierra pasando por la pregunta, `Ctrl+Plus` / `Ctrl+Minus` hacen
+zoom del lienzo igual que `+` / `-`.
+
 ## Actualizaciones
 
 La app mira los releases de este repo al arrancar y cada seis horas. Si hay una
@@ -210,7 +236,7 @@ renderer/
     fill.js          flood fill por líneas
     pdf.js           escritor de PDF de una página (filtro Up + DEFLATE, /SMask)
   js/ui/             icons, controls, tooltips, titlebar, color, layers, brushpanel,
-                     puck, modal, canvassize, update
+                     puck, modal, canvassize, update, placebar, closeguard
   js/dev/selftest.js el autotest
 ```
 

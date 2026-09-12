@@ -1136,6 +1136,12 @@ input  { font: inherit; color: inherit; }
 /* el acento como bisturi: marca LA accion primaria, y es lo unico coloreado */
 .sc-btn--primary { background: var(--sc-ac); color: var(--sc-bg); font-weight: 600; }
 .sc-btn--primary:hover { background: var(--sc-ac-hi); }
+/* la accion que tira trabajo ("Don't save"): en reposo es un ghost mas — no
+ * grita — y recien al pasar por encima se tine de peligro, igual que el tacho de
+ * las capas. Va apartada a la izquierda del pie, lejos de Guardar: descartar un
+ * dibujo no puede estar a un pixel de guardarlo. */
+.sc-btn--danger { color: var(--sc-tx2); margin-right: auto; }
+.sc-btn--danger:hover { background: color-mix(in srgb, var(--sc-danger) 22%, transparent); color: var(--sc-danger); }
 .sc-btn:disabled { background: var(--sc-s2); color: var(--sc-tx4); cursor: default; }
 .sc-btn:disabled:hover { background: var(--sc-s2); color: var(--sc-tx4); }
 .sc-btn:disabled:active { transform: none; }
@@ -1333,3 +1339,6 @@ input  { font: inherit; color: inherit; }
 }
 
 .sc-modal__hint--block { margin-top: 11px; }
+
+/* el mensaje del dialogo de cerrar: una frase, con el nombre del dibujo */
+.sc-close__msg { margin: 2px 0 0; font-size: 13px; line-height: 1.45; color: var(--sc-tx); }
