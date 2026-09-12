@@ -110,7 +110,27 @@ const UI_DRAWS = UI_MODE === 'demo' || UI_MODE === 'puck';
 const FAKE_ARG = process.argv.find((a) => a.startsWith('--fake-update='));
 const FAKE_UPDATE = (DEV || UI_ARG) && FAKE_ARG ? FAKE_ARG.split('=')[1] : null;
 
-let win = null;
+/* Las ventanas abiertas. Cada una es un documento con su propio renderer — un
+ * app.js entero, con su historial, su vista y sus pinceles — y el proceso
+ * principal no distingue entre ellas salvo para saber cual pidio que. Por eso
+ * todo lo de abajo que antes hablaba con "la ventana" habla con la que mando el
+ * mensaje (senderWin), y lo que llega de afuera va a la ultima que tuvo foco. */
+const windows = new Set();
+let lastFocused = null;
+
+const senderWin = (e) => BrowserWindow.fromWebContents(e.sender);
+
+function focusedWin() {
+  if (lastFocused && !lastFocused.isDestroyed()) return lastFocused;
+  for (const w of windows) if (!w.isDestroyed()) return w;
+  return null;
+}
+
+/* Ventanas con trabajo sin guardar. Lo reporta cada renderer al cambiar: el
+ * principal lo necesita para no reiniciar la app por una actualizacion cuando
+ * OTRA ventana — que el dialogo que pidio reiniciar no ve — tiene un dibujo a
+ * medio hacer. */
+const dirtyWins = new WeakSet();
 
 /* Ruta de un .scrawl pasada por linea de comandos: es como Windows entrega el
  * archivo al hacer doble clic, una vez registrada la asociacion. */
@@ -122,33 +142,69 @@ function fileFromArgv(argv) {
 
 let pendingFile = fileFromArgv(process.argv);
 
-async function sendOpenFile(filePath) {
-  if (!win || win.isDestroyed()) return;
+async function sendOpenFile(filePath, target = focusedWin()) {
+  if (!target || target.isDestroyed()) return;
   try {
     const json = await fs.readFile(filePath, 'utf8');
-    win.webContents.send('file:open-external', { json, path: filePath });
+    target.webContents.send('file:open-external', { json, path: filePath });
   } catch (err) {
     console.error(`[abrir] ${filePath}: ${err.message}`);
   }
 }
 
-function createWindow() {
-  /* Centrado a mano sobre el area util del display primario (descuenta la
-   * taskbar). Va a mano porque abajo pasamos x/y explicitos para crear la
-   * ventana fuera de pantalla, y eso desactiva el auto-centrado de Electron. */
-  const { x: waX, y: waY, width: waW, height: waH } = screen.getPrimaryDisplay().workArea;
-  const winX = Math.round(waX + (waW - WIN_W) / 2);
-  const winY = Math.round(waY + (waH - WIN_H) / 2);
+/* Donde y de que tamano nace una ventana.
+ *
+ * La primera va centrada a mano sobre el area util del display primario
+ * (descuenta la taskbar). Va a mano porque la ventana se crea con x/y explicitos
+ * fuera de pantalla, y eso desactiva el auto-centrado de Electron.
+ *
+ * Una abierta desde otra sale en cascada: el tamano de la que la abrio, corrida
+ * 40px hacia abajo y a la derecha, para que se vea que hay dos y no que la
+ * primera se recargo. Si con eso se saldria de su display vuelve al borde. Y si
+ * la que la abrio estaba maximizada, la nueva se maximiza tambien — quien
+ * trabaja a pantalla completa con la tableta quiere la segunda hoja igual, no
+ * una ventana chica que hay que ir a agrandar. */
+const CASCADE = 40;
 
-  win = new BrowserWindow({
+function placeFor(opener) {
+  if (!opener || opener.isDestroyed()) {
+    const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
+    return {
+      x: Math.round(x + (width - WIN_W) / 2),
+      y: Math.round(y + (height - WIN_H) / 2),
+      w: WIN_W, h: WIN_H, maximize: false,
+    };
+  }
+  const b = opener.getNormalBounds();
+  const wa = screen.getDisplayMatching(opener.getBounds()).workArea;
+  let x = b.x + CASCADE;
+  let y = b.y + CASCADE;
+  if (x + b.width > wa.x + wa.width) x = wa.x;
+  if (y + b.height > wa.y + wa.height) y = wa.y;
+  return { x, y, w: b.width, h: b.height, maximize: opener.isMaximized() };
+}
+
+/* opener  la ventana desde la que se pidio esta, o null para la primera
+ * seed    medida a heredar ({ w, h, dpi, paper }): la ventana nueva abre con la
+ *         hoja de la que la abrio, por el mismo motivo que Ctrl+N. Viaja por la
+ *         linea de comandos del renderer porque tiene que estar ANTES de crear
+ *         el documento — crearlo en A4 y reemplazarlo despues costaria cuatro
+ *         lienzos de 35 MB para nada. */
+function createWindow({ opener = null, seed = null } = {}) {
+  // la primera ventana es la que corre los modos de verificacion y recibe el
+  // archivo de la linea de comandos: son cosas del arranque, no de cada ventana
+  const primary = windows.size === 0;
+  const at = placeFor(opener);
+
+  const win = new BrowserWindow({
     /* Crear fuera de pantalla: el flash del compositor DWM ocurre en el primer
      * show() del HWND y no se puede evitar, solo mover a donde nadie lo vea. A
      * -20000 queda fuera de cualquier monitor, incluso en setups multi-pantalla
-     * hacia la izquierda o arriba. La ventana se snapea al centro despues. */
+     * hacia la izquierda o arriba. La ventana se snapea a su lugar despues. */
     x: -20000,
     y: -20000,
-    width: WIN_W,
-    height: WIN_H,
+    width: at.w,
+    height: at.h,
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: BG,
@@ -161,7 +217,15 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: seed ? [`--scrawl-seed=${JSON.stringify(seed)}`] : [],
     },
+  });
+
+  windows.add(win);
+  win.on('focus', () => { lastFocused = win; });
+  win.on('closed', () => {
+    windows.delete(win);
+    if (lastFocused === win) lastFocused = null;
   });
 
   if (SELFTEST) {
@@ -180,7 +244,11 @@ function createWindow() {
      * demasiado rapido dispara un segundo flash, esta vez en el destino: 200ms
      * es el valor validado, 120 resulto intermitente. */
     setTimeout(() => {
-      if (win && !win.isDestroyed()) win.setPosition(winX, winY);
+      if (win.isDestroyed()) return;
+      win.setPosition(at.x, at.y);
+      // recien despues de estar en su display: maximizar desde -20000 la
+      // mandaria al monitor que Windows considere mas cercano a la nada
+      if (at.maximize) win.maximize();
     }, 200);
     if (DEV && !UI_SHOT) win.webContents.openDevTools({ mode: 'detach' });
   });
@@ -213,7 +281,7 @@ function createWindow() {
   win.on('maximize', pushState);
   win.on('unmaximize', pushState);
 
-  if (SELFTEST) {
+  if (SELFTEST && primary) {
     win.webContents.once('did-finish-load', async () => {
       /* Se sondea window.__scrawlTest en vez de esperar un IPC: el autotest
        * importa solo modulos del motor y no depende del preload, asi que no
@@ -236,7 +304,7 @@ function createWindow() {
     });
   }
 
-  if (FAKE_UPDATE) {
+  if (FAKE_UPDATE && primary) {
     /* Estado de actualizacion simulado, para poder mirar ese aviso sin esperar a
      * que exista un release nuevo. Las notas van en HTML como las manda GitHub:
      * asi el simulacro tambien ejercita el pasaje a texto plano. */
@@ -251,7 +319,7 @@ function createWindow() {
     });
   }
 
-  if (UI_SHOT) {
+  if (UI_SHOT && primary) {
     win.webContents.once('did-finish-load', async () => {
       /* Margen para que el lienzo haya dibujado y las animaciones de entrada
        * hayan terminado; una captura antes de eso muestra una app a medio
@@ -265,16 +333,16 @@ function createWindow() {
     });
   }
 
-  if (pendingFile && !SELFTEST) {
+  if (pendingFile && !SELFTEST && primary) {
     // recien cuando el renderer monto: antes no hay quien reciba el mensaje
     win.webContents.once('did-finish-load', () => {
       const f = pendingFile;
       pendingFile = null;
-      sendOpenFile(f);
+      sendOpenFile(f, win);
     });
   }
 
-  win.on('closed', () => { win = null; });
+  return win;
 }
 
 /* Una sola instancia. Sin esto, cada doble clic en un .scrawl abriria otra copia
@@ -283,17 +351,27 @@ function createWindow() {
 /* Los modos de verificacion quedan afuera del lock a proposito: son procesos
  * efimeros y, si pidieran el lock con la app abierta, se cerrarian en silencio y
  * parecerian un test que "no imprime nada". */
+/* Una copia de prueba conviviendo con la app instalada: el lock se deriva de la
+ * carpeta userData, asi que con otra carpeta es otro lock. Lo usa el driver de
+ * la skill run-scrawl; un usuario nunca define esta variable. Va antes de pedir
+ * el lock porque despues ya no cambia nada. */
+if (process.env.SCRAWL_USER_DATA) app.setPath('userData', process.env.SCRAWL_USER_DATA);
+
 const gotLock = (SELFTEST || UI_SHOT) ? true : app.requestSingleInstanceLock();
 
 if (!gotLock) {
   app.quit();
 } else {
+  /* Con varias ventanas, el archivo va a la ultima que tuvo foco — el mismo
+   * lugar al que iba cuando habia una sola: el dibujo abierto ahi se reemplaza,
+   * como siempre. Abrirlo en una ventana nueva seria otro flujo, no este. */
   app.on('second-instance', (_e, argv) => {
     const f = fileFromArgv(argv);
-    if (!win || win.isDestroyed()) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
-    if (f) sendOpenFile(f);
+    const target = focusedWin();
+    if (!target) return;
+    if (target.isMinimized()) target.restore();
+    target.focus();
+    if (f) sendOpenFile(f, target);
   });
 
   // 'screen' recien existe despues de whenReady, de ahi que el centrado viva adentro.
@@ -309,25 +387,41 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (windows.size === 0) createWindow();
 });
 
 // ── controles de ventana ────────────────────────────────────────────────────
-ipcMain.on('window:minimize', () => win && win.minimize());
-ipcMain.on('window:toggle-maximize', () => {
+// cada uno actua sobre la ventana que lo pidio, no sobre "la" ventana
+ipcMain.on('window:minimize', (e) => senderWin(e)?.minimize());
+ipcMain.on('window:toggle-maximize', (e) => {
+  const win = senderWin(e);
   if (!win) return;
   if (win.isMaximized()) win.unmaximize();
   else win.maximize();
 });
-ipcMain.on('window:close', () => win && win.close());
-ipcMain.handle('window:is-maximized', () => (win ? win.isMaximized() : false));
+ipcMain.on('window:close', (e) => senderWin(e)?.close());
+ipcMain.handle('window:is-maximized', (e) => senderWin(e)?.isMaximized() ?? false);
+
+/* Otra ventana, o sea otro documento abierto a la vez. Es la forma de tener dos
+ * dibujos a la vista y pasar cosas de uno al otro por el portapapeles: copiar
+ * una capa aca, pegarla alla. Hereda la medida de la que la abre. */
+ipcMain.on('window:new', (e, seed) => {
+  createWindow({ opener: senderWin(e), seed: seed || null });
+});
+
+ipcMain.on('doc:dirty', (e, on) => {
+  const win = senderWin(e);
+  if (!win) return;
+  if (on) dirtyWins.add(win);
+  else dirtyWins.delete(win);
+});
 
 // ── archivos ────────────────────────────────────────────────────────────────
 /* El renderer hornea los bytes (es el unico que tiene los canvas); el main solo
  * elige ruta y escribe. */
 
-ipcMain.handle('file:export-png', async (_e, { data, suggestedName }) => {
-  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+ipcMain.handle('file:export-png', async (e, { data, suggestedName }) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(senderWin(e), {
     title: 'Export PNG',
     defaultPath: suggestedName || 'scrawl.png',
     filters: [{ name: 'PNG', extensions: ['png'] }],
@@ -340,8 +434,8 @@ ipcMain.handle('file:export-png', async (_e, { data, suggestedName }) => {
 /* El PDF llega ya armado desde el renderer (ver renderer/js/engine/pdf.js): es el
  * unico que tiene los pixeles, y el navegador trae DEFLATE de fabrica. Aca solo se
  * elige la ruta y se escribe, igual que con el PNG. */
-ipcMain.handle('file:export-pdf', async (_e, { data, suggestedName }) => {
-  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+ipcMain.handle('file:export-pdf', async (e, { data, suggestedName }) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(senderWin(e), {
     title: 'Export PDF',
     defaultPath: suggestedName || 'scrawl.pdf',
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
@@ -351,10 +445,10 @@ ipcMain.handle('file:export-pdf', async (_e, { data, suggestedName }) => {
   return { ok: true, path: filePath };
 });
 
-ipcMain.handle('file:save-doc', async (_e, { json, suggestedName, path: known }) => {
+ipcMain.handle('file:save-doc', async (e, { json, suggestedName, path: known }) => {
   let filePath = known || null;
   if (!filePath) {
-    const res = await dialog.showSaveDialog(win, {
+    const res = await dialog.showSaveDialog(senderWin(e), {
       title: 'Save drawing',
       defaultPath: suggestedName || 'untitled.scrawl',
       filters: [{ name: 'Scrawl drawing', extensions: ['scrawl'] }],
@@ -366,8 +460,8 @@ ipcMain.handle('file:save-doc', async (_e, { json, suggestedName, path: known })
   return { ok: true, path: filePath };
 });
 
-ipcMain.handle('file:open-doc', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+ipcMain.handle('file:open-doc', async (e) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(senderWin(e), {
     title: 'Open drawing',
     properties: ['openFile'],
     filters: [{ name: 'Scrawl drawing', extensions: ['scrawl'] }],
@@ -377,8 +471,8 @@ ipcMain.handle('file:open-doc', async () => {
   return { ok: true, json, path: filePaths[0] };
 });
 
-ipcMain.handle('file:open-image', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+ipcMain.handle('file:open-image', async (e) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(senderWin(e), {
     title: 'Open image',
     properties: ['openFile'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }],
@@ -423,7 +517,50 @@ function clipboardImagePath() {
  * tal cual si venia como ruta — o null si no hay nada pegable. El renderer los
  * decodifica igual en los dos casos, asi que no hace falta normalizar el formato
  * aca: reencodear un JPEG a PNG solo agregaria una perdida de calidad. */
+/* Una capa copiada desde Scrawl viaja por el portapapeles de dos formas a la
+ * vez, en una sola escritura:
+ *
+ *   image  el PNG de siempre, para que cualquier otra app la pegue como imagen
+ *   html   un <img> con ese MISMO PNG adentro (data URL) y la marca de la capa —
+ *          nombre, opacidad, blend y en que punto del lienzo estaba
+ *
+ * El HTML es el unico lugar donde entra la marca: Electron no deja agregar un
+ * formato propio junto a la imagen (cada escritura vacia el portapapeles), y un
+ * texto plano con JSON aparece como basura en cualquier campo de texto. El HTML
+ * solo lo miran las apps que saben que hacer con el, y ademas trae el PNG
+ * intacto: los bytes que se pegan en la otra ventana son los que se copiaron,
+ * sin pasar por el bitmap del sistema. */
+const LAYER_MARK = 'data-scrawl-layer';
+
+ipcMain.handle('clipboard:write-layer', (_e, { data, meta }) => {
+  const png = Buffer.from(data);
+  const mark = encodeURIComponent(JSON.stringify(meta));
+  const html = `<img src="data:image/png;base64,${png.toString('base64')}" ${LAYER_MARK}="${mark}">`;
+  clipboard.write({ image: nativeImage.createFromBuffer(png), html });
+  return { ok: true };
+});
+
+/* La marca de una capa de Scrawl, si el portapapeles trae una: { data, layer }
+ * o null. Se mira ANTES que la imagen a secas — es la misma imagen, pero con
+ * nombre y posicion — y solo se reconoce la propia: el HTML que deja un
+ * navegador al copiar una foto no la tiene y sigue el camino de siempre. */
+function clipboardLayer() {
+  const html = clipboard.readHTML();
+  if (!html) return null;
+  const mark = html.match(new RegExp(`${LAYER_MARK}="([^"]+)"`));
+  const src = html.match(/src="data:image\/png;base64,([^"]+)"/);
+  if (!mark || !src) return null;
+  try {
+    return { data: Buffer.from(src[1], 'base64'), layer: JSON.parse(decodeURIComponent(mark[1])) };
+  } catch {
+    return null;
+  }
+}
+
 ipcMain.handle('clipboard:read-image', async () => {
+  const own = clipboardLayer();
+  if (own) return own;
+
   const img = clipboard.readImage();
   if (img && !img.isEmpty()) return { data: img.toPNG() };
 
@@ -478,7 +615,9 @@ let updateState = { status: 'idle' };
 
 function setUpdateState(status, extra = {}) {
   updateState = { status, portable: PORTABLE, current: app.getVersion(), ...extra };
-  if (win && !win.isDestroyed()) win.webContents.send('update:state', updateState);
+  for (const w of windows) {
+    if (!w.isDestroyed()) w.webContents.send('update:state', updateState);
+  }
 }
 
 /* Las notas del release vienen como HTML desde GitHub. Se pasan a texto plano
@@ -572,14 +711,22 @@ ipcMain.on('update:download', () => {
   autoUpdater.downloadUpdate().catch(() => { /* ya lo reporta 'error' */ });
 });
 
-ipcMain.on('update:install', () => {
+ipcMain.handle('update:install', (e) => {
   /* Sin nada descargado, quitAndInstall cierra la app y no instala nada: seria
    * perder el trabajo a cambio de nada. */
-  if (updateState.status !== 'ready') return;
+  if (updateState.status !== 'ready') return { ok: false, reason: 'not-ready' };
+  /* Reiniciar cierra TODAS las ventanas. El dialogo que lo pidio avisa si su
+   * dibujo esta sin guardar, pero no ve a las demas: si otra tiene trabajo
+   * pendiente, no se reinicia y se le dice a quien pidio. */
+  const me = senderWin(e);
+  for (const w of windows) {
+    if (w !== me && !w.isDestroyed() && dirtyWins.has(w)) return { ok: false, reason: 'other-dirty' };
+  }
   /* Silencioso y volviendo a abrir sola: la actualizacion es un tramite, no una
    * visita al instalador. Si el modo silencioso no prosperara, autoInstallOnAppQuit
    * sigue en pie y el instalador aparece al cerrar. */
   autoUpdater.quitAndInstall(true, true);
+  return { ok: true };
 });
 
 ipcMain.on('update:page', () => shell.openExternal(RELEASES_URL));

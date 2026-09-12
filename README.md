@@ -12,7 +12,7 @@ npm start
 | --- | --- |
 | `npm start` | Abre la app |
 | `npm run dev` | Abre con DevTools |
-| `npm test` | Autotest del motor (84 aserciones, sale con código 1 si algo falla) |
+| `npm test` | Autotest del motor (94 aserciones, sale con código 1 si algo falla) |
 | `npm run shot` | Abre, dibuja trazos de muestra, guarda `.shots/ui.png` y cierra |
 | `npm run shot:puck` | Lo mismo, con el puck de navegación abierto sobre el dibujo |
 | `npm run shot:canvas` | Captura el diálogo de tamaño de lienzo abierto |
@@ -41,6 +41,8 @@ npm start
 | `Ctrl+S` `Ctrl+O` `Ctrl+Shift+E` | Guardar `.scrawl`, abrir, exportar PNG |
 | `Ctrl+Shift+P` | Exportar PDF |
 | `Ctrl+V` | Pegar una captura del portapapeles, a tamaño real, para acomodarla |
+| `Ctrl+T` | Otra ventana: un segundo dibujo abierto a la vez, con la misma hoja |
+| `Ctrl+Shift+C` | Copiar la capa activa, para pegarla como capa en otro dibujo (o en este) |
 | `Enter` / `Esc` | Dejar caer la captura que se está acomodando / descartarla |
 | Flechas | Empujarla de a un píxel (con `Shift`, de a diez) |
 | `Ctrl+Alt+C` | Tamaño del lienzo (también clickeando la medida en la barra de estado) |
@@ -111,6 +113,48 @@ pegado dentro de una hoja con márgenes. Un lienzo sin tamaño de impresión que
 (DEFLATE sobre el RGB crudo, igual que un PNG) y la transparencia viaja como
 `/SMask`.
 
+## Dos dibujos a la vez
+
+`Ctrl+T` abre **otra ventana**, con su propio dibujo, su historial y su vista. No
+son pestañas dentro de una ventana a propósito: dos ventanas se pueden poner una
+al lado de la otra — la referencia en una, el trabajo en la otra — y cada una es
+un `app.js` entero corriendo aparte, así que el motor de dibujo no se enteró del
+cambio. La nueva hereda la hoja de la que la abrió, igual que `Ctrl+N`, y si esa
+estaba maximizada, la nueva también: quien trabaja a pantalla completa con la
+tableta quiere la segunda hoja igual. El nombre del documento va al título de la
+ventana, que la app no muestra pero `Alt+Tab` y la barra de tareas sí.
+
+Entre las dos se pasa por el portapapeles. `Ctrl+C` sigue copiando el dibujo
+aplastado, como siempre; **`Ctrl+Shift+C` copia solo la capa activa**, y al
+pegarla con el `Ctrl+V` de siempre vuelve como capa: con su nombre, su opacidad,
+su blend, y **en el mismo punto del lienzo** del que salió si las dos hojas miden
+lo mismo (si no, se centra en lo que se está viendo, como cualquier pegado).
+Flota igual que una captura, así que antes de soltarla se la puede correr o
+escalar — que de paso es la forma de mover un dibujo dentro de la misma hoja:
+copiar la capa, pegar, arrastrar, `Enter`.
+
+Va recortada a lo pintado, no la hoja entera. Un garabato de 300×200 en una A4
+viaja como un PNG de 300×200 y no como uno de 2480×3508 casi vacío, y la caja con
+la que se acomoda abraza el dibujo en vez de medir todo el lienzo. El recorte
+viaja con la capa para que el aterrizaje sea exacto. Una capa vacía no se copia:
+la app lo dice y deja el portapapeles como estaba.
+
+Cómo viaja es lo único no obvio. Electron no deja poner un formato propio junto
+a una imagen en el portapapeles — cada escritura lo vacía — así que la capa se
+escribe de dos formas **a la vez**: la imagen de siempre, para que cualquier
+otra app la pegue como un PNG con transparencia, y un HTML con un `<img>` que
+lleva ese mismo PNG adentro más la marca de la capa en un atributo. Al pegar,
+Scrawl mira primero si el HTML trae su marca; si no, sigue el camino de siempre,
+que no cambió: el HTML que deja un navegador al copiar una foto no la tiene. Los
+píxeles se leen del HTML y no del bitmap del sistema, así que llegan los bytes
+exactos que salieron. Un texto plano con el JSON habría sido más simple, pero
+aparecería como basura en cualquier campo de texto donde uno pegara después.
+
+Lo que un `.scrawl` abierto desde el explorador hace con varias ventanas es lo
+mismo que hacía con una: entra en la última que tuvo foco, reemplazando el
+dibujo que hubiera ahí. Y reiniciar para actualizar cierra todas, así que si
+otra ventana tiene trabajo sin guardar, la app no reinicia y lo dice.
+
 ## Actualizaciones
 
 La app mira los releases de este repo al arrancar y cada seis horas. Si hay una
@@ -150,7 +194,7 @@ Dos límites que conviene tener presentes:
 ## Estructura
 
 ```
-main.js              ventana (anti-flash), protocolo scrawl://, diálogos, portapapeles
+main.js              ventanas (anti-flash, cascada), protocolo scrawl://, diálogos, portapapeles
 preload.js           el puente, superficie mínima
 renderer/
   index.html         el layout, más el splash inline que mata el FOUC
@@ -198,8 +242,10 @@ tablet reportó. Es la razón por la que muchos canvas web se sienten baratos co
 
 `npm test` prueba el motor sin la interfaz: undo exacto, la capa wet, la respuesta a
 la presión, que recomponer una región dé idéntico resultado que recomponer todo,
-borrador, flood fill, capas, el round-trip de guardado, la evicción del historial y
-que deshacer un pegado devuelva también el tamaño del lienzo.
+borrador, flood fill, capas, el round-trip de guardado, la evicción del historial,
+que deshacer un pegado devuelva también el tamaño del lienzo, y que el recorte con
+el que viaja una capa copiada sea exacto — que no se coma el último píxel ni tome
+por vacío uno apenas visible.
 
 Del tamaño de impresión verifica la aritmética contra los números publicados (una A4
 a 300 DPI son 2480×3508), que el reconocimiento cierre el círculo — lo que el módulo

@@ -133,14 +133,14 @@ export function initUpdate({ isDirty, save }) {
 
     if (status === 'ready') {
       if (dirty) {
-        dialog.button('Restart anyway', 'ghost', () => window.scrawl.update.install());
-        dialog.button('Save and restart', 'primary', async () => {
+        dialog.button('Restart anyway', 'ghost', install);
+        dialog.button('Save and restart', 'primary', async (close) => {
           await save();
-          window.scrawl.update.install();
+          install(close);
         });
       } else {
         dialog.button('Later', 'ghost', (close) => close());
-        dialog.button('Restart now', 'primary', () => window.scrawl.update.install());
+        dialog.button('Restart now', 'primary', install);
       }
       return;
     }
@@ -151,6 +151,18 @@ export function initUpdate({ isDirty, save }) {
       // el portable no baja nada por su cuenta: el navegador se lleva el trabajo
       if (portable) close();
     });
+  }
+
+  /* Reiniciar cierra todas las ventanas, y este dialogo solo sabe del dibujo de
+   * la suya. Si otra tiene trabajo sin guardar, el principal no reinicia y aca
+   * se dice por que: la salida es ir a esa ventana y guardar, no adivinar. El
+   * dialogo se cierra antes del aviso — el velo del modal taparia el toast. */
+  async function install(close) {
+    const res = await window.scrawl.update.install();
+    if (res && !res.ok && res.reason === 'other-dirty') {
+      close?.();
+      toast('Another window has unsaved changes — save it first', 'alert', 3600);
+    }
   }
 
   function hintRow(text) {

@@ -3,13 +3,14 @@ name: run-scrawl
 description: Lanzar y manejar la app real de Scrawl para verificar un cambio con los ojos — sacar screenshots, elegir herramientas, simular trazos (incluso frenando a mitad de un gesto). Usala siempre que haya que correr/abrir/probar la app, capturar su UI, o confirmar que un cambio funciona en la app de verdad y no solo en el selftest.
 ---
 
-Scrawl es una app Electron de una sola ventana. Para uso desde un agente se
-maneja con el driver REPL de esta carpeta, que la lanza vía Playwright
-(`playwright-core`, ya está en devDependencies — alcanza con `npm install`).
+Scrawl es una app Electron; cada documento vive en su propia ventana (`Ctrl+T`
+abre otra). Para uso desde un agente se maneja con el driver REPL de esta
+carpeta, que la lanza vía Playwright (`playwright-core`, ya está en
+devDependencies — alcanza con `npm install`).
 
 Antes de elegir el driver, mirá si alcanza con lo que la app ya trae:
 
-- `npm test` — selftest del motor (85 aserciones), sin ventana visible.
+- `npm test` — selftest del motor (94 aserciones), sin ventana visible.
 - `npm run shot` / `shot:puck` / `shot:canvas` / `shot:update` — capturas de
   estados fijos, sin Playwright. El modo `demo` dibuja trazos sintéticos **con
   presión variable**, cosa que el driver no puede hacer (ver Limitaciones).
@@ -37,6 +38,8 @@ ventana; `box` imprime el rectángulo del lienzo para apuntar adentro.
 | `launch` | abre la app y espera `#sc-app.ready` + 1.2s de asentamiento |
 | `ss [nombre]` | captura → `.shots/<nombre>.png` |
 | `box` | rectángulo del lienzo `#sc-canvas` |
+| `wins` / `win <n>` | lista las ventanas abiertas / apunta los demás comandos a la n-ésima (0 = la primera; espera su `ready`) |
+| `wait <ms>` | pausa — para dejar que un modal termine de cerrarse antes de seguir tecleando |
 | `tool <tecla>` | herramienta por atajo: b p m a e l g i h |
 | `hover <x> <y>` | mueve el puntero sin apretar |
 | `down` / `move <x> <y> [pasos]` / `up` | gesto por partes — permite capturar A MITAD de un trazo, con el botón apretado |
@@ -50,16 +53,28 @@ ventana; `box` imprime el rectángulo del lienzo para apuntar adentro.
 
 - **`ELECTRON_RUN_AS_NODE` heredado del entorno del agente**: con eso Electron
   arranca como Node pelado y no hay ventana jamás. El driver lo saca del env.
-- **Lock de instancia única**: si Scrawl ya está abierto, la copia de prueba se
-  cierra en silencio y `launch` da timeout. Cerrar la app real primero
-  (`Get-Process electron` para chequear de quién es cada proceso — otros
-  proyectos también corren Electron). Mientras el driver corre, un doble clic
-  en un `.scrawl` aterriza en la ventana de prueba, porque el lock lo tiene ella.
+- **Lock de instancia única**: el lock de Electron se deriva de la carpeta
+  `userData`, así que el driver le da a la copia de prueba una propia
+  (`SCRAWL_USER_DATA`, que `main.js` honra) y convive con la app instalada
+  aunque esté abierta. Antes había que cerrar la app real, y un doble clic en
+  un `.scrawl` aterrizaba en la ventana de prueba; ahora cada una tiene su lock.
+  Si `launch` da timeout igual, `Get-Process electron,Scrawl` dice quién corre.
+- **Varias ventanas**: `press Control+T` abre otra; `win 1` apunta el driver a
+  ella. Cambiar de ventana en el driver NO le da el foco en el sistema — las
+  teclas llegan igual por CDP — así que una captura de la ventana que quedó
+  tapada puede mostrar un toast viejo: con la ventana ocluida Chromium frena
+  sus timers y el toast no se va hasta que vuelva al frente. No es un bug de la
+  app. La ventana nueva sale en cascada (+40,+40) sobre la que la abrió, con su
+  mismo tamaño, o maximizada si aquella lo estaba.
+- **Teclear justo después de cerrar un modal**: el velo tarda en irse y se come
+  el atajo o el trazo. Un `wait 400` después de `Apply` lo resuelve.
 - **Señal de listo**: `boot()` pone la clase `ready` en `#sc-app`; después
   quedan el fade del splash y el reposicionamiento de la ventana (nace
   off-screen en -20000 y se mueve a los 200ms). El driver ya espera todo eso.
   Las capturas salen bien aunque la ventana esté off-screen: capturan
   contenido, no pantalla.
+- **El portapapeles es el del sistema**: copiar una capa desde la copia de
+  prueba pisa lo que el usuario tuviera copiado, igual que en la app real.
 - **Verificar posiciones con `pos`, no con los píxeles del trazo**: el trazo
   pintado persigue al puntero con retardo (suavizado exponencial), así que el
   anillo del pincel va apenas adelante de la tinta. Es lo esperado.

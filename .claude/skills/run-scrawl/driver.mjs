@@ -9,6 +9,7 @@
 import { _electron as electron } from 'playwright-core';
 import * as readline from 'node:readline';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 const APP_DIR = path.resolve(import.meta.dirname, '../../..');
@@ -23,6 +24,11 @@ let shotN = 0;
  * Electron arranca como Node pelado y la ventana no existe nunca. */
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
+
+/* userData propio para la copia de prueba: el lock de instancia unica de Electron
+ * se deriva de esa carpeta, asi que con otra la prueba convive con la app
+ * instalada en vez de cerrarse en silencio si estaba abierta. */
+env.SCRAWL_USER_DATA = path.join(os.tmpdir(), 'scrawl-driver');
 
 const need = () => { if (!page) { console.log('ERROR: primero launch'); return true; } return false; };
 const n = (v) => parseFloat(v);
@@ -63,6 +69,35 @@ const COMMANDS = {
     if (need()) return;
     const b = await page.locator('#sc-canvas').boundingBox();
     console.log(JSON.stringify(b));
+  },
+
+  /* Varias ventanas (Ctrl+T abre otra). `wins` las lista con su indice y su
+   * titulo; `win <n>` deja los demas comandos apuntando a esa. Una ventana recien
+   * abierta puede no estar lista todavia: se espera su `ready` igual que en
+   * launch. Los indices son el orden de apertura. */
+  async wins() {
+    if (!app) return console.log('ERROR: primero launch');
+    const all = app.windows();
+    for (let i = 0; i < all.length; i++) {
+      const t = await all[i].title().catch(() => '?');
+      console.log(`${i}${all[i] === page ? ' *' : '  '} ${t}`);
+    }
+  },
+
+  async win(n) {
+    if (!app) return console.log('ERROR: primero launch');
+    const i = parseInt(n, 10) || 0;
+    let all = app.windows();
+    // la ventana pedida puede estar por abrirse: se le da un momento
+    if (!all[i]) {
+      await app.waitForEvent('window', { timeout: 10_000 }).catch(() => {});
+      all = app.windows();
+    }
+    if (!all[i]) return console.log(`ERROR: no hay ventana ${i} (hay ${all.length})`);
+    page = all[i];
+    await page.waitForSelector('#sc-app.ready', { timeout: 20_000 });
+    await page.waitForTimeout(300);
+    console.log('ventana', i, '—', await page.title());
   },
 
   // teclas de herramienta: b p m a e l g i h (las mismas de la app)
@@ -123,6 +158,8 @@ const COMMANDS = {
   },
 
   async press(key) { if (!need()) await page.keyboard.press(key.trim()); },
+  // pausa en ms: para dejar que un modal termine de cerrarse o un toast de irse
+  async wait(ms) { if (!need()) await page.waitForTimeout(parseInt(ms, 10) || 300); },
   async type(text) { if (!need()) await page.keyboard.type(text, { delay: 25 }); },
 
   async text(sel) {

@@ -438,6 +438,46 @@ export function unionRect(a, b) {
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 }
 
+/* Rectangulo que ocupa lo pintado en una capa — el bounding box de sus pixeles
+ * con alfa — o null si esta vacia.
+ *
+ * Es lo que hace que copiar una capa mande solo el dibujo y no la hoja entera:
+ * un garabato de 300x200 en una A4 viaja como 300x200, y la caja con la que
+ * despues se acomoda abraza el trazo en vez de medir todo el lienzo.
+ *
+ * Se recorre por filas desde arriba y desde abajo, y despues por columnas solo
+ * dentro de esas filas: sobre un lienzo de 2480x3508 son ocho millones de
+ * pixeles y mirar cada uno cuatro veces se nota. El alfa se lee como el byte
+ * alto de un Uint32, que en little-endian es donde queda. */
+export function layerBounds(layer) {
+  const w = layer.canvas.width;
+  const h = layer.canvas.height;
+  const px = new Uint32Array(layer.ctx.getImageData(0, 0, w, h).data.buffer);
+
+  const rowHas = (y) => {
+    const end = (y + 1) * w;
+    for (let i = y * w; i < end; i++) if (px[i] & 0xff000000) return true;
+    return false;
+  };
+
+  let top = 0;
+  while (top < h && !rowHas(top)) top++;
+  if (top === h) return null;
+  let bottom = h - 1;
+  while (bottom > top && !rowHas(bottom)) bottom--;
+
+  const colHas = (x) => {
+    for (let y = top; y <= bottom; y++) if (px[y * w + x] & 0xff000000) return true;
+    return false;
+  };
+  let left = 0;
+  while (left < w && !colHas(left)) left++;
+  let right = w - 1;
+  while (right > left && !colHas(right)) right--;
+
+  return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+}
+
 /* Dibuja una capa escalada dentro de un canvas de miniatura, con 'contain'. */
 export function drawThumb(canvas, layer, docW, docH) {
   const c = canvas.getContext('2d');

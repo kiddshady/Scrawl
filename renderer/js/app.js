@@ -9,7 +9,9 @@
  * redibujar un lienzo identico sesenta veces por segundo, y en una app que uno
  * deja abierta durante horas eso se nota. */
 
-import { ScrawlDoc, BLEND_MODES, clampRect, unionRect, loadImage } from './engine/doc.js';
+import {
+  ScrawlDoc, BLEND_MODES, clampRect, unionRect, loadImage, layerBounds, makeCanvas,
+} from './engine/doc.js';
 import { Viewport } from './engine/viewport.js';
 import { Painter, BRUSHES, TOOL_SETTINGS, makeBrush, toHex } from './engine/brush.js';
 import { StrokeInput, StrokePath } from './engine/stroke.js';
@@ -56,9 +58,16 @@ const ZOOM_DRAG_PX = 180;
 const DEFAULT_PAPER = { id: 'a4', orientation: 'portrait' };
 const DEFAULT_DPI = 300;
 
-const startSize = paperPixels(DEFAULT_PAPER.id, DEFAULT_PAPER.orientation, DEFAULT_DPI);
-const doc = new ScrawlDoc(startSize.w, startSize.h, DEFAULT_DPI);
-doc.paper = { ...DEFAULT_PAPER };
+/* Una ventana abierta desde otra (Ctrl+T) hereda la hoja de la que la abrio, por
+ * el mismo motivo que Ctrl+N: quien se armo una A4 quiere la siguiente igual. La
+ * medida viene con la ventana desde el arranque (ver preload), asi que el
+ * documento nace ya del tamano correcto en vez de crearse en A4 y reemplazarse. */
+const seed = window.scrawl.win.seed;
+const startSize = seed
+  ? { w: seed.w, h: seed.h }
+  : paperPixels(DEFAULT_PAPER.id, DEFAULT_PAPER.orientation, DEFAULT_DPI);
+const doc = new ScrawlDoc(startSize.w, startSize.h, seed ? seed.dpi : DEFAULT_DPI);
+doc.paper = seed ? (seed.paper ?? null) : { ...DEFAULT_PAPER };
 const canvas = q('sc-canvas');
 const view = new Viewport(canvas, doc);
 const painter = new Painter(doc);
@@ -131,6 +140,22 @@ function markDirty(on = true) {
   if (dirtyDoc === on) return;
   dirtyDoc = on;
   q('sc-docname').classList.toggle('dirty', on);
+  // el principal lo necesita para no reiniciar la app con esto sin guardar
+  window.scrawl.file.reportDirty(on);
+  syncTitle();
+}
+
+/* El nombre del documento va en la barra propia y ADEMAS en el titulo de la
+ * ventana, que la app no muestra pero Windows si: en Alt+Tab y en la barra de
+ * tareas es lo unico que distingue dos ventanas de Scrawl entre si. */
+function setDocName(path) {
+  q('sc-docname').textContent = path ? baseName(path) : 'Untitled';
+  syncTitle();
+}
+
+function syncTitle() {
+  const name = docPath ? baseName(docPath) : 'Untitled';
+  document.title = `${dirtyDoc ? '● ' : ''}${name} — Scrawl`;
 }
 
 // ── herramientas ────────────────────────────────────────────────────────────
@@ -714,6 +739,39 @@ async function copyToClipboard() {
   toast('Copied to clipboard', 'clipboard');
 }
 
+/* Copia SOLO la capa activa, para pegarla en otro dibujo — otra ventana, o este
+ * mismo — como capa: al pegar vuelve con su nombre, su opacidad y su blend, y en
+ * el mismo punto del lienzo del que salio si las hojas miden igual.
+ *
+ * Va recortada a lo pintado, no la hoja entera. Un garabato de 300x200 en una A4
+ * es un PNG de 300x200 y no de 2480x3508 casi vacio, y al pegarlo la caja con la
+ * que se acomoda abraza el dibujo en vez de ser todo el lienzo — asi de paso se
+ * lo puede correr o escalar antes de soltarlo. El recorte viaja en la marca
+ * (x, y) para que el aterrizaje sea exacto.
+ *
+ * Al portapapeles va como imagen normal ademas de con su marca: en cualquier
+ * otra app se pega como un PNG con transparencia. */
+async function copyLayer() {
+  commitPlacement();
+  const layer = doc.active;
+  if (!layer) return;
+  const b = layerBounds(layer);
+  if (!b) { toast('That layer is empty — nothing to copy', 'clipboard'); return; }
+
+  const crop = makeCanvas(b.w, b.h);
+  crop.getContext('2d').drawImage(layer.canvas, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+  const blob = await new Promise((r) => crop.toBlob(r, 'image/png'));
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await window.scrawl.clip.writeLayer(buf, {
+    name: layer.name,
+    opacity: layer.opacity,
+    blend: layer.blend,
+    x: b.x, y: b.y, w: b.w, h: b.h,
+    docW: doc.width, docH: doc.height,
+  });
+  toast(`Copied “${layer.name}” · ${b.w}×${b.h}`, 'clipboard');
+}
+
 async function saveDoc(forceDialog = false) {
   commitPlacement();
   const json = JSON.stringify(doc.toJSON());
@@ -724,7 +782,7 @@ async function saveDoc(forceDialog = false) {
   );
   if (!res.ok) return;
   docPath = res.path;
-  q('sc-docname').textContent = baseName(res.path);
+  setDocName(res.path);
   markDirty(false);
   toast(`Saved ${baseName(res.path)}`, 'save');
 }
@@ -770,7 +828,7 @@ function adoptDoc(next, path = null) {
   painter.syncSize();
   history.clear();
   docPath = path;
-  q('sc-docname').textContent = path ? baseName(path) : 'Untitled';
+  setDocName(path);
   markDirty(false);
   updateStatusSize();
   view.fit();
@@ -785,6 +843,15 @@ function newDoc() {
   fresh.paper = doc.paper;
   adoptDoc(fresh, null);
   toast('New drawing', 'newDoc');
+}
+
+/* Otro documento SIN cerrar este: una ventana mas, con su propio dibujo, su
+ * historial y su vista. Es lo que permite tener dos dibujos abiertos a la vez y
+ * pasar cosas de uno al otro — copiar una capa aca, pegarla alla — o tener una
+ * referencia a la vista mientras se trabaja en el otro. Hereda la hoja, igual
+ * que Ctrl+N. */
+function newWindow() {
+  window.scrawl.win.newWindow({ w: doc.width, h: doc.height, dpi: doc.dpi, paper: doc.paper });
 }
 
 // ── colocar una imagen ──────────────────────────────────────────────────────
@@ -820,7 +887,7 @@ const PLACE_HINT = 'Drag to move · corners to scale · Enter to place · Esc to
 const MIN_PLACE = 16;      // lado minimo en px de documento: mas chico no se agarra
 const MAX_PLACE = 32000;   // techo duro, por si un arrastre se desboca
 
-async function placeImage(src, label) {
+async function placeImage(src, label, layer = null) {
   let img;
   try {
     img = await loadImage(src);
@@ -829,23 +896,32 @@ async function placeImage(src, label) {
     toast('That image could not be read', 'clear', 3200);
     return;
   }
-  startPlacement(img, label, src);
+  startPlacement(img, label, src, layer);
 }
 
 /* Arranca el estado flotante. Si ya habia una imagen acomodandose, esa aterriza
- * donde estaba: pegar dos veces seguidas deja las dos, no pierde la primera. */
-function startPlacement(img, label, url) {
+ * donde estaba: pegar dos veces seguidas deja las dos, no pierde la primera.
+ *
+ * layer es la marca de una capa copiada desde Scrawl, si la imagen es una. Con
+ * ella la imagen no se centra: aparece en el punto exacto del que salio, para
+ * que pasar una capa de un dibujo al otro la deje donde estaba — siempre que las
+ * dos hojas midan lo mismo, porque en una de otra medida "el mismo punto" no
+ * quiere decir nada y ahi vuelve a valer el centro. Y al soltarla, la capa nace
+ * con la opacidad y el blend que tenia. */
+function startPlacement(img, label, url, layer = null) {
   commitPlacement();
 
+  const same = layer && layer.docW === doc.width && layer.docH === doc.height;
   const c = visibleCenter();
   placing = {
     img, label, url,
     w: img.width,
     h: img.height,
-    x: Math.round(c.x - img.width / 2),
-    y: Math.round(c.y - img.height / 2),
+    x: same ? layer.x : Math.round(c.x - img.width / 2),
+    y: same ? layer.y : Math.round(c.y - img.height / 2),
     handle: null,
     active: null,
+    layer: layer ? { opacity: layer.opacity, blend: layer.blend } : null,
   };
   view.placement = placing;
 
@@ -1007,6 +1083,11 @@ function commitPlacement() {
 
   const before = docState(doc);
   const layer = doc.addLayer(doc.layers.length, p.label);
+  // una capa copiada vuelve como era, no como una captura mas
+  if (p.layer) {
+    layer.opacity = p.layer.opacity;
+    layer.blend = p.layer.blend;
+  }
   layer.ctx.imageSmoothingEnabled = true;
   layer.ctx.imageSmoothingQuality = 'high';
   layer.ctx.drawImage(p.img, rect.x, rect.y, rect.w, rect.h);
@@ -1017,7 +1098,9 @@ function commitPlacement() {
   layersPanel.markEntering(layer.id);
   markDirty(true);
   refreshAll();
-  toast(`Placed ${rect.w}×${rect.h}`, 'image');
+  toast(p.layer
+    ? `Placed “${p.label}” · ${rect.w}×${rect.h}`
+    : `Placed ${rect.w}×${rect.h}`, 'image');
   return true;
 }
 
@@ -1055,7 +1138,12 @@ async function pasteImage() {
    * tal cual, que bien puede ser un JPEG de ShareX. El decodificador sniffea los
    * bytes, asi que declarar un tipo aca solo abriria la posibilidad de mentirle. */
   const blob = new Blob([new Uint8Array(res.data)]);
-  // con un archivo detras, la capa lleva su nombre en vez de un 'Pasted' mas
+  /* Una capa copiada desde Scrawl trae su marca y vuelve con su nombre; con un
+   * archivo detras, la capa lleva el del archivo en vez de un 'Pasted' mas. */
+  if (res.layer) {
+    await placeImage(URL.createObjectURL(blob), res.layer.name || 'Layer', res.layer);
+    return;
+  }
   await placeImage(URL.createObjectURL(blob), res.path ? baseName(res.path) : 'Pasted');
 }
 
@@ -1242,8 +1330,16 @@ function onKeyDown(e) {
       // no imprime. El PDF va con Shift, en la misma familia que el PNG.
       case 'p': if (e.shiftKey) { e.preventDefault(); exportPDF(); } return;
       case 'v': e.preventDefault(); pasteImage(); return;
-      // Ctrl+Alt+C es el atajo de toda la vida para el tamano del lienzo
-      case 'c': e.preventDefault(); e.altKey ? canvasSizeDialog() : copyToClipboard(); return;
+      /* Ctrl+Alt+C es el atajo de toda la vida para el tamano del lienzo. Con
+       * Shift se copia SOLO la capa activa; a secas, el dibujo entero. */
+      case 'c':
+        e.preventDefault();
+        if (e.altKey) canvasSizeDialog();
+        else if (e.shiftKey) copyLayer();
+        else copyToClipboard();
+        return;
+      // la tecla de "otra pestana" de cualquier navegador: aca es otra ventana
+      case 't': e.preventDefault(); newWindow(); return;
       case '0': e.preventDefault(); fitView(); return;
       case '1': e.preventDefault(); resetZoom(); return;
       default: return;
@@ -1394,6 +1490,7 @@ initTitlebar({
   menus: {
     file: [
       { label: 'New', action: 'newDoc', key: 'Ctrl+N', icon: 'newDoc' },
+      { label: 'New Window', action: 'newWindow', key: 'Ctrl+T', icon: 'newWindow' },
       { label: 'Open…', action: 'openDoc', key: 'Ctrl+O', icon: 'open' },
       { label: 'Save', action: 'save', key: 'Ctrl+S', icon: 'save' },
       { label: 'Save As…', action: 'saveAs', key: 'Ctrl+Shift+S', icon: 'save' },
@@ -1411,6 +1508,7 @@ initTitlebar({
       { label: 'Undo', action: 'undo', key: 'Ctrl+Z', icon: 'undo' },
       { label: 'Redo', action: 'redo', key: 'Ctrl+Shift+Z', icon: 'redo' },
       { rule: true },
+      { label: 'Copy Layer', action: 'copyLayer', key: 'Ctrl+Shift+C', icon: 'clipboard' },
       { label: 'Clear Layer', action: 'clearLayer', key: 'Del', icon: 'clear' },
     ],
     image: [
@@ -1431,8 +1529,8 @@ initTitlebar({
     ],
   },
   onAction: (action) => ({
-    newDoc, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
-    importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard,
+    newDoc, newWindow, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
+    importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard, copyLayer,
     checkUpdates: () => updater.checkNow(),
     undo, redo, clearLayer, canvasSize: canvasSizeDialog,
     addLayer, duplicateLayer, mergeDown, deleteLayer,
@@ -1627,6 +1725,7 @@ function boot() {
   syncHistoryUI();
   setTool('brush', { silent: true });
   hint(hintFor('brush'));
+  syncTitle();
   invalidate();
 
   q('sc-app').classList.add('ready');

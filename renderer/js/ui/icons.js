@@ -51,6 +51,8 @@ export const ICONS = {
 
   // ── archivo ─────────────────────────────────────────────────────────────
   newDoc: 'M6.5 3.5h7l5 5v12h-12z M13.5 3.5v5h5',
+  // una ventana — marco con su barra de titulo — con el mas adentro: otra igual
+  newWindow: 'M3.5 5.5h17v13h-17z M3.5 9h17 M12 11.5v4.5 M9.75 13.75h4.5',
   save: 'M5.5 4.5h10l4 4v11h-14z M8.5 4.5v5h6v-5 M8 19.5v-5h8v5',
   open: 'M3.5 6.5h5l2 2.5h9.5v10h-16.5z',
   exportImage: 'M12 15.5V3.5 M8 7.5l4-4 4 4 M4 15v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V15',

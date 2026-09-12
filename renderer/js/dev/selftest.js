@@ -10,7 +10,7 @@
  * recomponer el lienzo entero. Un cambio en el motor se verifica corriendo esto,
  * no mirando y confiando. */
 
-import { ScrawlDoc, clampRect } from '../engine/doc.js';
+import { ScrawlDoc, clampRect, layerBounds } from '../engine/doc.js';
 import { PAPERS, DPIS, paperPixels, paperMm, matchPaper, pxToMm } from '../engine/paper.js';
 import { Painter, makeBrush } from '../engine/brush.js';
 import {
@@ -407,6 +407,49 @@ function testPasteKeepsCanvas() {
     px(over, 0, 0).a === 255 && px(over, 199, 149).a === 255);
 }
 
+// ── 10b. copiar una capa: solo lo pintado ───────────────────────────────────
+
+/* Copiar una capa manda el rectangulo de lo que tiene pintado, no la hoja
+ * entera, y ese rectangulo viaja en la marca para que al pegar caiga en el mismo
+ * lugar. Lo que se romperia en silencio: un borde que se come el ultimo pixel
+ * (el dibujo pegado aparece un pixel corrido), un pixel apenas visible que se
+ * toma por vacio, o una capa vacia que se copia como un PNG de nada. */
+function testLayerBounds() {
+  const doc = new ScrawlDoc(200, 150);
+  const layer = doc.active;
+
+  ok('una capa vacia no tiene limites', layerBounds(layer) === null);
+
+  layer.ctx.fillStyle = '#e05a3c';
+  layer.ctx.fillRect(30, 40, 50, 20);
+  let b = layerBounds(layer);
+  ok('los limites son el rect pintado, exacto',
+    b && b.x === 30 && b.y === 40 && b.w === 50 && b.h === 20, JSON.stringify(b));
+
+  /* Un pixel casi transparente en la esquina opuesta cuenta: es lo que queda de
+   * un trazo de aerografo, y recortarlo cambiaria el dibujo. */
+  const faint = layer.ctx.createImageData(1, 1);
+  faint.data.set([255, 255, 255, 3]);
+  layer.ctx.putImageData(faint, 199, 149);
+  b = layerBounds(layer);
+  ok('un pixel apenas visible tambien entra',
+    b && b.x === 30 && b.y === 40 && b.w === 170 && b.h === 110, JSON.stringify(b));
+
+  /* El recorte con esos limites conserva los pixeles tal cual: lo que se copia
+   * es lo que se pego. */
+  const crop = document.createElement('canvas');
+  crop.width = b.w;
+  crop.height = b.h;
+  crop.getContext('2d').drawImage(layer.canvas, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+  const c00 = pxOf(crop, 0, 0);
+  const cEnd = pxOf(crop, b.w - 1, b.h - 1);
+  ok('el recorte arranca en el primer pixel pintado', c00.a === 255 && c00.r > 200, JSON.stringify(c00));
+  ok('y termina en el ultimo', cEnd.a === 3, JSON.stringify(cEnd));
+
+  layer.clear();
+  ok('vaciada, vuelve a no tener limites', layerBounds(layer) === null);
+}
+
 // ── 11. exportar a PDF ──────────────────────────────────────────────────────
 
 /* Un PDF mal armado no se nota mirando: el archivo pesa lo que tiene que pesar y
@@ -672,6 +715,7 @@ async function run() {
     ['guardar / abrir', testRoundTrip],
     ['presupuesto del historial', testHistoryBudget],
     ['pegar sin tocar el lienzo', testPasteKeepsCanvas],
+    ['limites de una capa', testLayerBounds],
     ['exportar PDF', testPDF],
     ['exportar PDF con alfa', testPDFAlpha],
     ['tamanos de papel', testPaper],
