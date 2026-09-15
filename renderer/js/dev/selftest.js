@@ -18,6 +18,9 @@ import {
   canvasEntry, canvasState,
 } from '../engine/history.js';
 import { floodFill } from '../engine/fill.js';
+import {
+  selectionRect, selectionHasPixels, copySelectionPixels, eraseSelectionPixels,
+} from '../engine/selection.js';
 import { buildPDF } from '../engine/pdf.js';
 
 const results = [];
@@ -450,6 +453,50 @@ function testLayerBounds() {
   ok('vaciada, vuelve a no tener limites', layerBounds(layer) === null);
 }
 
+// ── 10c. seleccion rectangular ──────────────────────────────────────────────
+
+function testSelection() {
+  const doc = new ScrawlDoc(100, 80);
+  const layer = doc.active;
+  const history = new History();
+  layer.ctx.fillStyle = '#e05a3c';
+  layer.ctx.fillRect(20, 15, 40, 30);
+
+  const rect = selectionRect({ x: 61.2, y: 46.8 }, { x: 19.4, y: 14.2 }, doc.width, doc.height);
+  ok('seleccionar funciona arrastrando en cualquier direccion',
+    rect.x === 19 && rect.y === 14 && rect.w === 43 && rect.h === 33, JSON.stringify(rect));
+
+  const clipped = selectionRect({ x: -20, y: 10 }, { x: 30, y: 90 }, doc.width, doc.height);
+  ok('la seleccion se recorta al lienzo',
+    clipped.x === 0 && clipped.y === 10 && clipped.w === 30 && clipped.h === 70,
+    JSON.stringify(clipped));
+  ok('un click sin area no crea seleccion',
+    selectionRect({ x: 10, y: 10 }, { x: 10, y: 10 }, doc.width, doc.height) === null);
+
+  ok('la seleccion detecta contenido tenue y opaco', selectionHasPixels(layer, rect));
+  ok('un area transparente se reconoce vacia',
+    !selectionHasPixels(layer, { x: 70, y: 60, w: 20, h: 15 }));
+
+  const crop = copySelectionPixels(layer, rect);
+  ok('copiar conserva el tamano exacto elegido', crop.width === rect.w && crop.height === rect.h,
+    `${crop.width}x${crop.height}`);
+  ok('copiar conserva la posicion relativa de los pixeles',
+    pxOf(crop, 1, 1).r === 224 && pxOf(crop, 40, 30).r === 224
+      && pxOf(crop, 0, 0).a === 0);
+
+  const before = grab(layer, rect);
+  eraseSelectionPixels(layer, rect);
+  const after = grab(layer, rect);
+  history.push(pixelEntry(layer, rect, before, after, 'delete selection'));
+  ok('borrar afecta solo el fragmento seleccionado',
+    px(layer, 20, 15).a === 0 && px(layer, 62, 45).a === 0);
+
+  history.undo();
+  ok('undo devuelve el fragmento borrado', px(layer, 20, 15).r === 224 && px(layer, 59, 44).r === 224);
+  history.redo();
+  ok('redo vuelve a borrar el fragmento', px(layer, 20, 15).a === 0);
+}
+
 // ── 11. exportar a PDF ──────────────────────────────────────────────────────
 
 /* Un PDF mal armado no se nota mirando: el archivo pesa lo que tiene que pesar y
@@ -716,6 +763,7 @@ async function run() {
     ['presupuesto del historial', testHistoryBudget],
     ['pegar sin tocar el lienzo', testPasteKeepsCanvas],
     ['limites de una capa', testLayerBounds],
+    ['seleccion rectangular', testSelection],
     ['exportar PDF', testPDF],
     ['exportar PDF con alfa', testPDFAlpha],
     ['tamanos de papel', testPaper],

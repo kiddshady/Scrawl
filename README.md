@@ -12,9 +12,11 @@ npm start
 | --- | --- |
 | `npm start` | Abre la app |
 | `npm run dev` | Abre con DevTools |
-| `npm test` | Autotest del motor (94 aserciones, sale con código 1 si algo falla) |
+| `npm test` | Autotest del motor (104 aserciones, sale con código 1 si algo falla) |
+| `npm run smoke:selection` | Smoke real de toolbar, arrastre, borrar, undo y deseleccionar |
 | `npm run shot` | Abre, dibuja trazos de muestra, guarda `.shots/ui.png` y cierra |
 | `npm run shot:puck` | Lo mismo, con el puck de navegación abierto sobre el dibujo |
+| `npm run shot:selection` | Lo mismo, con un fragmento seleccionado sobre los trazos |
 | `npm run shot:canvas` | Captura el diálogo de tamaño de lienzo abierto |
 | `npm run shot:update` | Captura el aviso de actualización con un estado simulado |
 | `npm run icons` | Regenera `build/icon.png` + `.ico` desde la curva de la marca (necesita ImageMagick) |
@@ -26,7 +28,7 @@ npm start
 | | |
 | --- | --- |
 | `B` `P` `M` `A` `E` | Pincel, lápiz, marcador, aerógrafo, borrador |
-| `L` `G` `I` `H` | Línea recta, relleno, cuentagotas, mano |
+| `L` `G` `I` `S` `H` | Línea recta, relleno, cuentagotas, selección rectangular, mano |
 | `[` `]` | Tamaño del pincel (también `Alt`+rueda) |
 | `Alt` (mantener) | Cuentagotas temporal |
 | `Espacio` (mantener) | Puck de navegación: arrastrar el núcleo hace zoom, el resto desplaza |
@@ -34,18 +36,34 @@ npm start
 | Dar vuelta el lápiz | Borrador |
 | `X` | Alternar con el color anterior |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Deshacer / rehacer |
-| `Del` | Vaciar la capa |
+| `Del` | Borrar la selección; sin una selección, vaciar la capa |
 | Rueda | Zoom (también `+` `-`, con o sin `Ctrl`) · `Ctrl+0` encajar · `Ctrl+1` al 100% |
 | `Tab` | Ocultar los paneles |
 | `Ctrl+Shift+N` `Ctrl+J` `Ctrl+E` | Capa nueva, duplicar, aplastar |
 | `Ctrl+S` `Ctrl+O` `Ctrl+Shift+E` | Guardar `.scrawl`, abrir, exportar PNG |
 | `Ctrl+Shift+P` | Exportar PDF |
 | `Ctrl+V` | Pegar una captura del portapapeles, a tamaño real, para acomodarla |
+| `Ctrl+C` `Ctrl+X` | Copiar / cortar la selección de la capa activa; sin selección, `Ctrl+C` copia el dibujo entero |
+| `Esc` | Deseleccionar |
 | `Ctrl+T` `Ctrl+W` | Otra ventana (un segundo dibujo abierto a la vez, con la misma hoja) / cerrar esta — preguntando si hay cambios sin guardar |
 | `Ctrl+Shift+C` | Copiar la capa activa, para pegarla como capa en otro dibujo (o en este) |
 | `Enter` / `Esc` | Dejar caer la captura que se está acomodando / descartarla |
 | Flechas | Empujarla de a un píxel (con `Shift`, de a diez) |
 | `Ctrl+Alt+C` | Tamaño del lienzo (también clickeando la medida en la barra de estado) |
+
+## Selección de fragmentos
+
+`S` activa la selección rectangular. Se arrastra una caja sobre el lienzo y las
+acciones trabajan únicamente sobre ese rectángulo de la **capa activa**: `Ctrl+C`
+lo copia con transparencia, `Ctrl+X` lo copia y lo borra, y `Del` lo borra sin
+copiar. Cortar y borrar son pasos de historial normales, así que `Ctrl+Z` devuelve
+los píxeles exactos. `Esc` saca la selección.
+
+El fragmento copiado viaja como imagen normal para cualquier otra aplicación y,
+entre ventanas de Scrawl, además conserva nombre, opacidad, blend y posición. Al
+pegarlo vuelve flotando en una capa nueva para poder moverlo o escalarlo antes de
+dejarlo caer. Elegir otra herramienta cierra la selección: no funciona como una
+máscara para pintar, su alcance deliberado es copiar, cortar y borrar regiones.
 
 ## Tamaño de impresión
 
@@ -124,8 +142,9 @@ estaba maximizada, la nueva también: quien trabaja a pantalla completa con la
 tableta quiere la segunda hoja igual. El nombre del documento va al título de la
 ventana, que la app no muestra pero `Alt+Tab` y la barra de tareas sí.
 
-Entre las dos se pasa por el portapapeles. `Ctrl+C` sigue copiando el dibujo
-aplastado, como siempre; **`Ctrl+Shift+C` copia solo la capa activa**, y al
+Entre las dos se pasa por el portapapeles. Sin una selección, `Ctrl+C` sigue
+copiando el dibujo aplastado, como siempre; **`Ctrl+Shift+C` copia solo la capa
+activa**, y al
 pegarla con el `Ctrl+V` de siempre vuelve como capa: con su nombre, su opacidad,
 su blend, y **en el mismo punto del lienzo** del que salió si las dos hojas miden
 lo mismo (si no, se centra en lo que se está viendo, como cualquier pegado).

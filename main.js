@@ -85,6 +85,8 @@ const DEV = process.argv.includes('--dev');
  *   puck  lo mismo, y ademas deja el puck de navegacion abierto sobre el dibujo:
  *         es un elemento que solo existe con una tecla apretada, y sin esto no
  *         habria forma de mirarlo sin estar sentado frente a la app
+ *   selection  dibuja la muestra y deja un fragmento seleccionado, para revisar
+ *              juntos el overlay y el boton nuevo de la barra
  *   canvas  abre el dialogo de tamano del lienzo, por el mismo motivo: un modal
  *         solo existe mientras alguien lo tiene abierto
  *   update  abre el aviso de actualizacion; hay que darle el estado a mirar con
@@ -93,6 +95,9 @@ const DEV = process.argv.includes('--dev');
  * aserciones y cierra con codigo 1 si alguna fallo, para que sirva desde un
  * script o un hook de commit. */
 const SELFTEST = process.argv.includes('--selftest');
+// Bypass del lock de instancia para los smoke de Playwright: no debe secuestrar
+// ni cerrar una ventana de Scrawl que la persona tenga abierta mientras testea.
+const SMOKE = process.argv.includes('--smoke');
 
 const UI_ARG = process.argv.find((a) => a.startsWith('--ui-shot='));
 const UI_RAW = UI_ARG ? UI_ARG.slice('--ui-shot='.length) : null;
@@ -102,7 +107,7 @@ const UI_MODE_AT = UI_RAW ? UI_RAW.match(/:([a-z]+)$/) : null;
 const UI_MODE = UI_MODE_AT ? UI_MODE_AT[1] : '1';
 const UI_SHOT = UI_MODE_AT ? UI_RAW.slice(0, -UI_MODE_AT[0].length) : UI_RAW;
 // los modos que dibujan necesitan mas margen antes de disparar la captura
-const UI_DRAWS = UI_MODE === 'demo' || UI_MODE === 'puck';
+const UI_DRAWS = UI_MODE === 'demo' || UI_MODE === 'puck' || UI_MODE === 'selection';
 
 /* Estado de actualizacion de mentira, para revisar ese aviso sin tener que
  * publicar un release. Solo con --dev o durante una captura: en una app
@@ -382,7 +387,7 @@ function createWindow({ opener = null, seed = null } = {}) {
  * el lock porque despues ya no cambia nada. */
 if (process.env.SCRAWL_USER_DATA) app.setPath('userData', process.env.SCRAWL_USER_DATA);
 
-const gotLock = (SELFTEST || UI_SHOT) ? true : app.requestSingleInstanceLock();
+const gotLock = (SELFTEST || UI_SHOT || SMOKE) ? true : app.requestSingleInstanceLock();
 
 if (!gotLock) {
   app.quit();

@@ -42,6 +42,10 @@ export class Viewport {
      * quien la mueve es app.js. */
     this.placement = null;
 
+    /* Rectangulo elegido con la herramienta de seleccion, en coordenadas de
+     * DOCUMENTO. Es un overlay: nunca entra en doc.flat ni en una exportacion. */
+    this.selection = null;
+
     this.#buildChecker();
   }
 
@@ -201,7 +205,31 @@ export class Viewport {
     c.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
 
     if (this.placement) this.#drawPlacement();
+    if (this.selection) this.#drawSelection();
     if (this.cursor) this.#drawCursor();
+  }
+
+  /* Dos trazos discontinuos desfasados hacen una "hormiga" legible sobre claro
+   * y oscuro sin obligar a mantener un loop de animacion prendido. El ambar
+   * apenas lavado identifica el area sin tapar el dibujo que se esta eligiendo. */
+  #drawSelection() {
+    const s = this.selection;
+    const a = this.toScreen(s.x, s.y);
+    const r = { x: a.x, y: a.y, w: s.w * this.scale, h: s.h * this.scale };
+    const c = this.ctx;
+
+    c.save();
+    c.fillStyle = 'rgba(224,160,74,.08)';
+    c.fillRect(r.x, r.y, r.w, r.h);
+    c.lineWidth = 1;
+    c.setLineDash([5, 5]);
+    c.strokeStyle = 'rgba(0,0,0,.9)';
+    c.lineDashOffset = 0;
+    c.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+    c.strokeStyle = 'rgba(255,255,255,.95)';
+    c.lineDashOffset = 5;
+    c.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+    c.restore();
   }
 
   /* La imagen que todavia no aterrizo, con su caja y sus cuatro tiradores.

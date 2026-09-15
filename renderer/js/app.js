@@ -16,6 +16,9 @@ import { Viewport } from './engine/viewport.js';
 import { Painter, BRUSHES, TOOL_SETTINGS, makeBrush, toHex } from './engine/brush.js';
 import { StrokeInput, StrokePath } from './engine/stroke.js';
 import { floodFill } from './engine/fill.js';
+import {
+  selectionRect, selectionHasPixels, copySelectionPixels, eraseSelectionPixels,
+} from './engine/selection.js';
 import { buildPDF } from './engine/pdf.js';
 import { matchPaper, paperMm, paperPixels, formatMm } from './engine/paper.js';
 import {
@@ -110,6 +113,12 @@ let panelsHidden = false;
 let placing = null;
 let placeDrag = null;
 
+/* La seleccion es geometria, no pixeles flotantes: siempre apunta al mismo rect
+ * del documento y las operaciones actuan sobre la capa activa. selecting solo
+ * existe mientras el puntero esta apoyado armando esa caja. */
+let selection = null;
+let selecting = null;
+
 /* La recta tiene un redibujado pendiente para el proximo frame. Ver
  * renderStraight: es lo que junta los cuatro o cinco puntos que una tableta
  * entrega por frame en un solo trazado. */
@@ -183,7 +192,8 @@ function brushFor(t) {
 
 function setTool(next, { silent = false } = {}) {
   commitPlacement();
-  if (!(next in brushes) && !['line', 'fill', 'picker', 'pan'].includes(next)) return;
+  if (!(next in brushes) && !['line', 'fill', 'picker', 'select', 'pan'].includes(next)) return;
+  if (tool === 'select' && next !== 'select') clearSelection({ silent: true });
   tool = next;
   for (const b of document.querySelectorAll('[data-tool]')) {
     b.classList.toggle('on', b.dataset.tool === next);
@@ -194,6 +204,10 @@ function setTool(next, { silent = false } = {}) {
   const settings = brushes[next] || toolSettings[next];
   if (settings) brushPanel.setBrush(settings);
   updateCanvasCursor();
+  /* Cambiar de herramienta con el puntero quieto tambien tiene que retirar o
+   * recalcular el anillo: esperar al proximo pointermove deja el cursor del
+   * pincel anterior flotando encima de una seleccion recien activada. */
+  updateBrushCursor();
   if (!silent) hint(hintFor(next));
 }
 
@@ -207,6 +221,7 @@ function hintFor(t) {
     line: 'Click and drag to draw a straight line',
     fill: 'Fills the region you see, painting into the active layer',
     picker: 'Click anywhere to sample that color',
+    select: 'Drag around an area · Ctrl+C copy · Ctrl+X cut · Del delete · Esc deselect',
     pan: 'Drag to move the canvas · Hold Space from any tool',
   };
   return map[t] || '';
@@ -241,6 +256,7 @@ function updateCanvasCursor() {
       : 'move';
   } else if (t === 'picker') canvas.style.cursor = 'crosshair';
   else if (t === 'fill') canvas.style.cursor = 'crosshair';
+  else if (t === 'select') canvas.style.cursor = 'crosshair';
   else canvas.style.cursor = 'none';
 }
 
@@ -274,6 +290,7 @@ function beginStroke(pt, mods) {
    * que es justo cuando uno necesita acercarse a mirar el encaje. */
   if (placing) { beginPlaceDrag(pt); return; }
 
+  if (t === 'select') { beginSelection(docPt); return; }
   if (t === 'picker') { pickColorAt(docPt); return; }
   if (t === 'fill') { doFill(docPt); return; }
 
@@ -344,6 +361,7 @@ function moveStroke(pt, mods) {
     return;
   }
   if (placeDrag) { movePlaceDrag(pt); return; }
+  if (selecting) { moveSelection(view.toDoc(pt.x, pt.y)); return; }
   if (!stroke) return;
 
   const docPt = view.toDoc(pt.x, pt.y);
@@ -444,6 +462,7 @@ function endStroke() {
     return;
   }
   if (placeDrag) { endPlaceDrag(); return; }
+  if (selecting) { endSelection(); return; }
   if (!stroke) return;
 
   /* La recta puede tener un frame pendiente: el ultimo movimiento del puntero
@@ -512,6 +531,107 @@ function doFill(docPt) {
   invalidate();
   layersPanel.refreshThumbs();
 }
+
+// ── seleccion rectangular ───────────────────────────────────────────────────
+
+function setSelection(rect) {
+  selection = rect;
+  view.selection = rect;
+  invalidate();
+}
+
+function beginSelection(docPt) {
+  selecting = { from: docPt, to: docPt };
+  setSelection(null);
+  hint('Drag around the area to select');
+}
+
+function moveSelection(docPt) {
+  selecting.to = docPt;
+  const rect = selectionRect(selecting.from, selecting.to, doc.width, doc.height);
+  setSelection(rect);
+  if (rect) hint(`Selecting ${rect.w}×${rect.h}`);
+}
+
+function endSelection() {
+  const rect = selectionRect(selecting.from, selecting.to, doc.width, doc.height);
+  selecting = null;
+  setSelection(rect);
+  hint(rect
+    ? `Selected ${rect.w}×${rect.h} · Ctrl+C copy · Ctrl+X cut · Del delete · Esc deselect`
+    : hintFor('select'));
+}
+
+function clearSelection({ silent = false } = {}) {
+  if (!selection && !selecting) return false;
+  selecting = null;
+  setSelection(null);
+  if (!silent) hint(hintFor(tool));
+  return true;
+}
+
+async function copySelection({ announce = true } = {}) {
+  const layer = doc.active;
+  const rect = selection;
+  if (!layer || !rect) return false;
+  if (!selectionHasPixels(layer, rect)) {
+    if (announce) toast('That part of the layer is empty', 'clipboard');
+    return false;
+  }
+
+  const crop = copySelectionPixels(layer, rect);
+  const blob = await new Promise((resolve) => crop.toBlob(resolve, 'image/png'));
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await window.scrawl.clip.writeLayer(buf, {
+    name: `${layer.name} fragment`,
+    opacity: layer.opacity,
+    blend: layer.blend,
+    x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+    docW: doc.width, docH: doc.height,
+  });
+  if (announce) toast(`Copied selection · ${rect.w}×${rect.h}`, 'clipboard');
+  return true;
+}
+
+function eraseSelected(label, announce = true) {
+  const layer = doc.active;
+  const rect = selection;
+  if (!layer || !rect) return false;
+  if (!selectionHasPixels(layer, rect)) {
+    if (announce) toast('That part of the layer is already empty', 'clear');
+    return false;
+  }
+
+  const before = grab(layer, rect);
+  eraseSelectionPixels(layer, rect);
+  const after = grab(layer, rect);
+  history.push(pixelEntry(layer, rect, before, after, label));
+  doc.recompose(rect);
+  markDirty(true);
+  invalidate();
+  layersPanel.refreshThumbs();
+  if (announce) toast(`Deleted selection · ${rect.w}×${rect.h}`, 'clear');
+  return true;
+}
+
+async function cutSelection() {
+  if (!selection) return;
+  const layer = doc.active;
+  const rect = { ...selection };
+  if (!(await copySelection({ announce: false }))) return;
+  /* El portapapeles cruza IPC. Si durante ese await se cambio de capa o se armo
+   * otra seleccion, no hay que cortar ese destino nuevo: la copia ya hecha sigue
+   * siendo valida y la interrupcion convierte la accion, de forma segura, en
+   * solo copiar. */
+  if (doc.active !== layer || !selection
+    || selection.x !== rect.x || selection.y !== rect.y
+    || selection.w !== rect.w || selection.h !== rect.h) return;
+  if (eraseSelected('cut selection', false)) {
+    toast(`Cut selection · ${rect.w}×${rect.h}`, 'clipboard');
+  }
+}
+
+function deleteSelection() { eraseSelected('delete selection'); }
 
 function clearLayer() {
   commitPlacement();
@@ -672,6 +792,7 @@ function canvasSizeDialog() {
  * originales, asi que achicar el lienzo y deshacer devuelve hasta el ultimo
  * pixel que quedo afuera. */
 function applyCanvasSize({ w, h, dpi, paper, anchor, scale }) {
+  clearSelection({ silent: true });
   const before = canvasState(doc);
 
   doc.dpi = dpi;
@@ -733,6 +854,7 @@ async function exportPDF() {
 
 async function copyToClipboard() {
   commitPlacement();
+  if (selection) return copySelection();
   const flat = doc.render();
   const blob = await new Promise((r) => flat.toBlob(r, 'image/png'));
   const buf = new Uint8Array(await blob.arrayBuffer());
@@ -815,6 +937,7 @@ function adoptDoc(next, path = null) {
   /* El documento se va entero: una imagen a medio acomodar sobre el anterior no
    * tiene donde aterrizar. */
   endPlacement();
+  clearSelection({ silent: true });
   doc.width = next.width;
   doc.height = next.height;
   doc.dpi = next.dpi;
@@ -921,6 +1044,7 @@ async function placeImage(src, label, layer = null) {
  * con la opacidad y el blend que tenia. */
 function startPlacement(img, label, url, layer = null) {
   commitPlacement();
+  clearSelection({ silent: true });
 
   const same = layer && layer.docW === doc.width && layer.docH === doc.height;
   const c = visibleCenter();
@@ -1261,7 +1385,7 @@ function togglePanels() {
 
 // ── atajos ──────────────────────────────────────────────────────────────────
 
-const TOOL_KEYS = { b: 'brush', p: 'pencil', m: 'marker', a: 'airbrush', e: 'eraser', l: 'line', g: 'fill', i: 'picker', h: 'pan' };
+const TOOL_KEYS = { b: 'brush', p: 'pencil', m: 'marker', a: 'airbrush', e: 'eraser', l: 'line', g: 'fill', i: 'picker', s: 'select', h: 'pan' };
 
 function onKeyDown(e) {
   // mientras se escribe en un campo, el teclado es del campo
@@ -1341,6 +1465,7 @@ function onKeyDown(e) {
       // no imprime. El PDF va con Shift, en la misma familia que el PNG.
       case 'p': if (e.shiftKey) { e.preventDefault(); exportPDF(); } return;
       case 'v': e.preventDefault(); pasteImage(); return;
+      case 'x': e.preventDefault(); cutSelection(); return;
       /* Ctrl+Alt+C es el atajo de toda la vida para el tamano del lienzo. Con
        * Shift se copia SOLO la capa activa; a secas, el dibujo entero. */
       case 'c':
@@ -1364,8 +1489,14 @@ function onKeyDown(e) {
   }
 
   if (k === 'tab') { e.preventDefault(); togglePanels(); return; }
+  if (k === 'escape' && clearSelection()) { e.preventDefault(); return; }
   if (k === 'x') { colorPicker.swap(); return; }
-  if (k === 'delete' || k === 'backspace') { e.preventDefault(); clearLayer(); return; }
+  if (k === 'delete' || k === 'backspace') {
+    e.preventDefault();
+    if (selection) deleteSelection();
+    else clearLayer();
+    return;
+  }
 
   // corchetes: el gesto universal para cambiar el tamano del pincel sin mirar
   if (k === '[' || k === ']') {
@@ -1509,6 +1640,7 @@ initTitlebar({
     if (action === 'redo') return history.canRedo;
     if (action === 'mergeDown') return doc.activeIndex > 0;
     if (action === 'deleteLayer') return doc.layers.length > 1;
+    if (action === 'copySelection' || action === 'cutSelection' || action === 'deleteSelection') return !!selection;
     return true;
   },
   menus: {
@@ -1532,6 +1664,10 @@ initTitlebar({
     edit: [
       { label: 'Undo', action: 'undo', key: 'Ctrl+Z', icon: 'undo' },
       { label: 'Redo', action: 'redo', key: 'Ctrl+Shift+Z', icon: 'redo' },
+      { rule: true },
+      { label: 'Cut Selection', action: 'cutSelection', key: 'Ctrl+X', icon: 'select' },
+      { label: 'Copy Selection', action: 'copySelection', key: 'Ctrl+C', icon: 'select' },
+      { label: 'Delete Selection', action: 'deleteSelection', key: 'Del', icon: 'clear' },
       { rule: true },
       { label: 'Copy Layer', action: 'copyLayer', key: 'Ctrl+Shift+C', icon: 'clipboard' },
       { label: 'Clear Layer', action: 'clearLayer', key: 'Del', icon: 'clear' },
@@ -1557,7 +1693,7 @@ initTitlebar({
     newDoc, newWindow, closeWindow, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
     importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard, copyLayer,
     checkUpdates: () => updater.checkNow(),
-    undo, redo, clearLayer, canvasSize: canvasSizeDialog,
+    undo, redo, clearLayer, copySelection, cutSelection, deleteSelection, canvasSize: canvasSizeDialog,
     addLayer, duplicateLayer, mergeDown, deleteLayer,
     zoomIn: () => { view.zoomIn(); updateZoomLabel(); invalidate(); },
     zoomOut: () => { view.zoomOut(); updateZoomLabel(); invalidate(); },
@@ -1766,7 +1902,9 @@ function boot() {
     }));
   }
 
-  if (UI_MODE === 'demo' || UI_MODE === 'puck') runDemo({ puck: UI_MODE === 'puck' });
+  if (UI_MODE === 'demo' || UI_MODE === 'puck' || UI_MODE === 'selection') {
+    runDemo({ puck: UI_MODE === 'puck', selection: UI_MODE === 'selection' });
+  }
   /* Mismo motivo que el modo puck: un dialogo modal solo existe mientras alguien
    * lo tiene abierto, y sin esto no habria forma de mirarlo sin estar sentado
    * frente a la app. */
@@ -1779,7 +1917,7 @@ function boot() {
 /* Trazos sinteticos con presion variable. Es la forma de verificar el motor sin
  * tablet: se corre con --ui-shot=ruta:demo y el PNG resultante muestra si los
  * pinceles, la presion y las capas hacen lo que deben. */
-function runDemo({ puck: showPuck = false } = {}) {
+function runDemo({ puck: showPuck = false, selection: showSelection = false } = {}) {
   const samples = [
     { tool: 'brush',    color: '#e05a3c', y: 0.22 },
     { tool: 'pencil',   color: '#e8e8e8', y: 0.38 },
@@ -1798,6 +1936,12 @@ function runDemo({ puck: showPuck = false } = {}) {
         hoverPt = { x: view.cssW * 0.5, y: view.cssH * 0.46, p: 0, pen: false, type: 'mouse' };
         spaceDown = true;
         enterNav();
+      }
+      if (showSelection) {
+        setTool('select');
+        beginSelection({ x: doc.width * 0.16, y: doc.height * 0.16 });
+        moveSelection({ x: doc.width * 0.72, y: doc.height * 0.60 });
+        endSelection();
       }
       return;
     }
