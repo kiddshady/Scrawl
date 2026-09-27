@@ -204,18 +204,40 @@ input  { font: inherit; color: inherit; }
 .sc-menubtn:hover { background: var(--sc-s3); color: var(--sc-tx); }
 .sc-menubtn.open { background: var(--sc-s4); color: var(--sc-tx); }
 
+/* El boton ocupa todo el alto (maximizada, tirar el mouse a la esquina tiene
+ * que acertar la cruz), pero lo que se ve —hover y anillo de foco— es una
+ * pastilla adentro, a la escala de un .sc-menubtn. Pintado sobre el boton, el
+ * anillo del teclado se cortaba contra el canto de la ventana, y el rojo de
+ * cerrar llegaba hasta el borde. Traido de Onyx, donde paso lo mismo. */
 .sc-winbtns { display: flex; -webkit-app-region: no-drag; height: 100%; }
 .sc-winbtn {
+  position: relative;
+  z-index: 0;
   width: 44px;
   height: 100%;
   display: grid;
   place-items: center;
   color: var(--sc-tx2);
-  transition: background var(--sc-t-fast) var(--sc-ease),
-              color var(--sc-t-fast) var(--sc-ease);
+  transition: color var(--sc-t-fast) var(--sc-ease);
 }
-.sc-winbtn:hover { background: var(--sc-s3); color: var(--sc-tx); }
-.sc-winbtn--close:hover { background: var(--sc-danger); color: #fff; }
+.sc-winbtn::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 5px;
+  right: 5px;
+  top: calc((100% - 26px) / 2);
+  height: 26px;
+  border-radius: var(--sc-r-sm);
+  transition: background var(--sc-t-fast) var(--sc-ease),
+              box-shadow var(--sc-t-fast) var(--sc-ease);
+}
+.sc-winbtn:hover { color: var(--sc-tx); }
+.sc-winbtn:hover::before { background: var(--sc-s3); }
+.sc-winbtn--close:hover { color: #fff; }
+.sc-winbtn--close:hover::before { background: var(--sc-danger); }
+.sc-winbtn:focus-visible { box-shadow: none; }
+.sc-winbtn:focus-visible::before { box-shadow: 0 0 0 2px var(--sc-s1), 0 0 0 3px var(--sc-ac); }
 
 /* ── toolbar (izquierda) ──────────────────────────────────────────────────── */
 
@@ -1217,8 +1239,13 @@ input  { font: inherit; color: inherit; }
   font-size: 11px;
   color: var(--sc-tx3);
   transition: background var(--sc-t-fast) var(--sc-ease),
-              color var(--sc-t-fast) var(--sc-ease);
+              color var(--sc-t-fast) var(--sc-ease),
+              box-shadow var(--sc-t-fast) var(--sc-ease);
 }
+/* El anillo va hacia adentro: el general sale 3px por fuera y aca hay 2px de
+ * carril, asi que se pisaba con el canto del control y con la opcion vecina.
+ * Igual que el segmentado de Onyx. */
+.sc-seg__btn:focus-visible { box-shadow: inset 0 0 0 1.5px var(--sc-ac); }
 .sc-seg__btn > svg { flex: none; }
 .sc-seg__btn:hover { color: var(--sc-tx); }
 .sc-seg__btn.on { background: var(--sc-ac-soft); color: var(--sc-ac); }

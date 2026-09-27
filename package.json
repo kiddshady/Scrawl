@@ -11,6 +11,7 @@
     "dev": "electron . --dev",
     "test": "electron . --selftest",
     "smoke:selection": "node build/smoke-selection.js",
+    "smoke:focus": "node build/smoke-focus.js",
     "shot": "electron . --ui-shot=.shots/ui.png:demo",
     "shot:puck": "electron . --ui-shot=.shots/puck.png:puck",
     "shot:selection": "electron . --ui-shot=.shots/selection.png:selection",
