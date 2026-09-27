@@ -60,7 +60,10 @@ const appRoot = path.resolve(__dirname, '..');
 
     console.log('[smoke:selection] toolbar, arrastre, Delete, undo y Escape pasaron');
   } finally {
-    if (electronApp) await electronApp.close();
+    // close() no alcanza: el trazo deja el dibujo sin guardar y, desde la 0.6.0,
+    // cerrar así pregunta. El test quedaba esperando un diálogo que nadie
+    // contesta. app.exit() sale sin pasar por el aviso.
+    if (electronApp) await electronApp.evaluate(({ app }) => app.exit(0)).catch(() => {});
   }
 })().catch((err) => {
   console.error(err);
