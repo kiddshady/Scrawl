@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, Menu, ipcMain, dialog, protocol, screen, clipboard, nativeImage, shell,
+  app, BrowserWindow, Menu, Tray, ipcMain, dialog, protocol, screen, clipboard, nativeImage, shell,
 } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
@@ -141,6 +141,59 @@ const dirtyWins = new WeakSet();
  * preguntarle mas): la proxima vez que se cierren, se cierran. */
 const closeApproved = new WeakSet();
 
+/* La app se va a la bandeja en vez de cerrarse.
+ *
+ * Cerrar la ULTIMA ventana — la X, Alt+F4, Ctrl+W, la barra de tareas — la
+ * esconde en vez de cerrarla: la app sigue en la bandeja con el dibujo intacto,
+ * historial incluido, y un clic en el icono la devuelve tal cual estaba. Con la
+ * tableta en la mano, un clic de mas en la esquina pasa; ahora no cuesta nada.
+ * Cerrar de verdad es una decision aparte: "Quit Scrawl" en la bandeja o en el
+ * menu File, y ahi si pasa por el aviso de cambios sin guardar.
+ *
+ * Solo la ultima. Con dos ventanas abiertas, cerrar una cierra ese documento
+ * como siempre — con su pregunta si esta sin guardar —, porque la app no se va
+ * a ningun lado: queda la otra. Esconderlas a todas apilaria documentos
+ * invisibles de cien megas que nadie se acuerda de que estan. */
+const TRAY_ICON = path.join(__dirname, 'build', 'tray.ico');
+let tray = null;
+
+/* La app se esta yendo de verdad (Quit, reiniciar para actualizar, apagar
+ * Windows): ninguna ventana se esconde. Se apaga en cuanto una ventana con
+ * cambios frena el cierre para preguntar — eso ya cancelo la salida, y si la
+ * pregunta se cancela la proxima X tiene que volver a mandarla a la bandeja. */
+let quitting = false;
+
+const openWins = () => [...windows].filter((w) => !w.isDestroyed());
+
+function reveal(win) {
+  if (!win || win.isDestroyed()) return;
+  if (!win.isVisible()) win.show();
+  if (win.isMinimized()) win.restore();
+  win.focus();
+}
+
+// todas las escondidas vuelven; si no habia ninguna, al frente la ultima usada
+function showApp() {
+  const hidden = openWins().filter((w) => !w.isVisible());
+  if (hidden.length) hidden.forEach(reveal);
+  else reveal(focusedWin());
+}
+
+function quitApp() {
+  app.quit();
+}
+
+function createTray() {
+  tray = new Tray(TRAY_ICON);
+  tray.setToolTip('Scrawl');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Show Scrawl', click: showApp },
+    { type: 'separator' },
+    { label: 'Quit Scrawl', click: quitApp },
+  ]));
+  tray.on('click', showApp);
+}
+
 /* Ruta de un .scrawl pasada por linea de comandos: es como Windows entrega el
  * archivo al hacer doble clic, una vez registrada la asociacion. */
 function fileFromArgv(argv) {
@@ -244,10 +297,22 @@ function createWindow({ opener = null, seed = null } = {}) {
    * 'window:close-confirmed'; hasta entonces la ventana se queda. Un dibujo
    * limpio se cierra sin preguntar, como siempre. */
   win.on('close', (e) => {
-    if (closeApproved.has(win) || !dirtyWins.has(win)) return;
+    if (closeApproved.has(win)) return;
+    // la ultima ventana no se cierra: se va a la bandeja (ver TRAY_ICON)
+    if (!quitting && tray && openWins().every((w) => w === win)) {
+      e.preventDefault();
+      win.hide();
+      return;
+    }
+    if (!dirtyWins.has(win)) return;
     e.preventDefault();
+    quitting = false;
+    // la pregunta tiene que verse aunque la ventana estuviera en la bandeja
+    reveal(win);
     win.webContents.send('window:confirm-close');
   });
+  // Windows cerrando sesion o apagando: no hay bandeja que valga
+  win.on('session-end', () => { quitting = true; });
   /* Sin renderer no hay quien conteste ni nada que guardar: una ventana cuyo
    * proceso se cayo tiene que poder cerrarse, o queda clavada para siempre. */
   win.webContents.on('render-process-gone', () => dirtyWins.delete(win));
@@ -399,8 +464,8 @@ if (!gotLock) {
     const f = fileFromArgv(argv);
     const target = focusedWin();
     if (!target) return;
-    if (target.isMinimized()) target.restore();
-    target.focus();
+    // abrir Scrawl otra vez con la app en la bandeja la trae de vuelta
+    reveal(target);
     if (f) sendOpenFile(f, target);
   });
 
@@ -414,10 +479,17 @@ if (!gotLock) {
      * el renderer. En --dev se conserva: recargar y abrir DevTools sirven ahi. */
     if (!DEV) Menu.setApplicationMenu(null);
     registerProtocol();
+    // los modos de verificacion son procesos efimeros: nada que dejar en la bandeja
+    if (!SELFTEST && !UI_SHOT) createTray();
     createWindow();
     initUpdates();
   });
 }
+
+/* Todo lo que cierra la app entera pasa por aca — Quit, reiniciar para
+ * actualizar, el close() de Playwright —, y ninguna de esas ventanas tiene que
+ * irse a la bandeja. Las que tengan cambios sin guardar igual preguntan. */
+app.on('before-quit', () => { quitting = true; });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -445,6 +517,8 @@ ipcMain.on('window:close-confirmed', (e) => {
   win.close();
 });
 ipcMain.handle('window:is-maximized', (e) => senderWin(e)?.isMaximized() ?? false);
+// cerrar la app de verdad, no a la bandeja: lo mismo que "Quit Scrawl" en el icono
+ipcMain.on('app:quit', quitApp);
 
 /* Otra ventana, o sea otro documento abierto a la vez. Es la forma de tener dos
  * dibujos a la vista y pasar cosas de uno al otro por el portapapeles: copiar

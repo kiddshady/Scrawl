@@ -1660,6 +1660,8 @@ initTitlebar({
       { label: 'Copy to Clipboard', action: 'copyImage', key: 'Ctrl+C', icon: 'clipboard' },
       { rule: true },
       { label: 'Check for Updates…', action: 'checkUpdates', icon: 'download' },
+      { rule: true },
+      { label: 'Quit Scrawl', action: 'quit', icon: 'quit' },
     ],
     edit: [
       { label: 'Undo', action: 'undo', key: 'Ctrl+Z', icon: 'undo' },
@@ -1693,6 +1695,7 @@ initTitlebar({
     newDoc, newWindow, closeWindow, openDoc, save: () => saveDoc(false), saveAs: () => saveDoc(true),
     importImage, paste: pasteImage, exportPNG, exportPDF, copyImage: copyToClipboard, copyLayer,
     checkUpdates: () => updater.checkNow(),
+    quit: () => window.scrawl.win.quit(),
     undo, redo, clearLayer, copySelection, cutSelection, deleteSelection, canvasSize: canvasSizeDialog,
     addLayer, duplicateLayer, mergeDown, deleteLayer,
     zoomIn: () => { view.zoomIn(); updateZoomLabel(); invalidate(); },

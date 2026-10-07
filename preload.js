@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('scrawl', {
     minimize: () => ipcRenderer.send('window:minimize'),
     toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
     close: () => ipcRenderer.send('window:close'),
+    // la app entera, no a la bandeja: cerrar la ultima ventana solo la esconde
+    quit: () => ipcRenderer.send('app:quit'),
     isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
     // otro documento en otra ventana, con la medida que se le pase
     newWindow: (seedFor) => ipcRenderer.send('window:new', seedFor),

@@ -72,6 +72,8 @@ export const ICONS = {
   download: 'M12 3.5v11.5 M7.5 10.5l4.5 4.5 4.5-4.5 M4 20.5h16',
   // flecha que da la vuelta: reiniciar para aplicar
   restart: 'M20.5 12a8.5 8.5 0 1 1-2.6-6.1 M20.5 3.5V9h-5.5',
+  // el boton de encendido: salir de la app, no esconderla en la bandeja
+  quit: 'M12 3.5v8 M7 6.3a7.5 7.5 0 1 0 10 0',
 
   // ── controles de ventana ────────────────────────────────────────────────
   winMin: 'M4 12h16',

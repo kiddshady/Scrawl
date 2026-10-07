@@ -77,9 +77,16 @@ ventana; `box` imprime el rectángulo del lienzo para apuntar adentro.
 - **Cerrar una ventana sucia pregunta**: `press Control+w` o un `close()` desde
   `evalmain` abren el modal "Unsaved changes" en vez de cerrar. Los botones son
   `.sc-modal .sc-btn--danger` (Don't save), `.sc-btn--ghost` (Cancel) y
-  `.sc-btn--primary` (Save). Con la última ventana cerrada la app termina y los
-  comandos siguientes fallan con "Target page ... has been closed": es la señal
-  de que cerró, no un error.
+  `.sc-btn--primary` (Save).
+- **La última ventana no se cierra, se va a la bandeja**: la X, `Control+w` o
+  `close()` sobre la única ventana la esconden (`isVisible()` da false) y la app
+  sigue viva, sin preguntar aunque esté sucia. No hay que sacarle capturas
+  escondida. Para traerla, `evalmain app.emit('second-instance', {}, [])` — el
+  mismo camino que abrir Scrawl otra vez; el clic en la bandeja no se puede
+  simular desde el driver. Para cerrar de verdad, `app.quit()` (o el ítem
+  *Quit Scrawl* del menú File): ahí sí pregunta, y al terminar los comandos
+  siguientes fallan con "Target page ... has been closed" — es la señal de que
+  cerró, no un error.
 - **Los diálogos nativos de archivo no se manejan**: para probar guardar,
   `launch` con una ruta; ahí Ctrl+S y el "Save" del cierre escriben en silencio.
 - **`quit` destruye las ventanas antes de cerrar**: `app.close()` es un

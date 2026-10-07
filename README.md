@@ -45,7 +45,7 @@ npm start
 | `Ctrl+V` | Pegar una captura del portapapeles, a tamaño real, para acomodarla |
 | `Ctrl+C` `Ctrl+X` | Copiar / cortar la selección de la capa activa; sin selección, `Ctrl+C` copia el dibujo entero |
 | `Esc` | Deseleccionar |
-| `Ctrl+T` `Ctrl+W` | Otra ventana (un segundo dibujo abierto a la vez, con la misma hoja) / cerrar esta — preguntando si hay cambios sin guardar |
+| `Ctrl+T` `Ctrl+W` | Otra ventana (un segundo dibujo abierto a la vez, con la misma hoja) / cerrar esta — preguntando si hay cambios sin guardar; la última se va a la bandeja |
 | `Ctrl+Shift+C` | Copiar la capa activa, para pegarla como capa en otro dibujo (o en este) |
 | `Enter` / `Esc` | Dejar caer la captura que se está acomodando / descartarla |
 | Flechas | Empujarla de a un píxel (con `Shift`, de a diez) |
@@ -200,6 +200,27 @@ si ya había quedado pegado, y lo que la app quiere de esas teclas lo maneja
 ella: `Ctrl+W` cierra pasando por la pregunta, `Ctrl+Plus` / `Ctrl+Minus` hacen
 zoom del lienzo igual que `+` / `-`.
 
+### La última ventana se va a la bandeja
+
+Cerrar la **última** ventana — la X, `Alt+F4`, `Ctrl+W`, la barra de tareas — no
+cierra la app: la esconde en la bandeja de Windows, con el dibujo intacto,
+historial incluido. Un clic en el garabato de la bandeja (o abrir Scrawl de nuevo)
+la devuelve tal cual estaba. Con la tableta en la mano, un clic de más en la
+esquina pasa, y así no cuesta nada: ni siquiera la pregunta de guardar, porque no
+se pierde nada.
+
+Cerrar de verdad es una decisión aparte: **Quit Scrawl**, en el menú del ícono de
+la bandeja o al final del menú *File*. Ese sí pasa por la pregunta de cambios sin
+guardar, y si se cancela la ventana se queda — y la próxima X vuelve a mandarla a
+la bandeja.
+
+Es solo la última a propósito. Con dos ventanas abiertas, cerrar una cierra ese
+documento como siempre, con su pregunta: la app no se va a ningún lado porque
+queda la otra, y esconderlas a todas apilaría documentos invisibles que nadie se
+acuerda de que están ahí. El ícono de la bandeja (`build/tray.ico`) lo genera
+`npm run icons` junto con el master: el mismo trazo, rasterizado a 16/20/24/32 con
+un piso de grosor para que a 16 px no se corte.
+
 ## Actualizaciones
 
 La app mira los releases de este repo al arrancar y cada seis horas. Si hay una
@@ -207,7 +228,7 @@ versión nueva se enciende una pastilla ámbar en la barra de estado y no pasa n
 más: no hay modal que aparezca solo, ni descarga que arranque sin permiso, ni
 reinicio de sorpresa. Clickeándola aparecen las notas del release y el botón para
 bajarla; una vez bajada se aplica al reiniciar, o sola la próxima vez que cierres
-la app. Con un dibujo sin guardar, el diálogo lo dice y ofrece guardar primero.
+la app con *Quit Scrawl* (mandarla a la bandeja no cuenta: la app sigue abierta). Con un dibujo sin guardar, el diálogo lo dice y ofrece guardar primero.
 
 Publicar una versión es `npm version <x.y.z>`, empujar el tag, y `npm run release`
 con `GH_TOKEN` en el entorno. Eso sube los dos ejecutables **y el `latest.yml`**,
