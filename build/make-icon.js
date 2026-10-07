@@ -12,12 +12,20 @@
  * El trazo se rasteriza con ancho variable igual que un trazo del motor: fino en
  * las puntas, grueso en el medio. El icono es, literalmente, una pincelada de la
  * app.
+ *
+ * Salen dos archivos:
+ *   icon.png  el master de 1024, del que npm run icons saca icon.ico
+ *   tray.ico  el de la bandeja: el mismo dibujo, rasterizado a cada tamano real
+ *             (16/20/24/32 = 100/125/150/200 % de escala de Windows). No se
+ *             achica el master: a 16 px su trazo queda en medio pixel y la
+ *             pincelada se lee como una mancha gris. Ver traySpec mas abajo.
  */
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
 const SIZE = 1024;
+const TRAY_SIZES = [16, 20, 24, 32];
 
 // misma d que renderer/js/ui/icons.js -> ICONS.mark y el splash de index.html
 const MARK = 'M3 16C4.5 9 7.5 20 9.5 13S14 17 16 10.5 19.5 9 21 7';
@@ -30,10 +38,11 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 <svg viewBox="0 0 24 24"><path id="mark" d="${MARK}"/></svg>
 <canvas id="c" width="${SIZE}" height="${SIZE}"></canvas>
 <script>
-(() => {
-  const S = ${SIZE};
-  const c = document.getElementById('c').getContext('2d');
-
+/* S       lado del lienzo, en pixeles reales
+ * span    cuanto ocupa el dibujo de punta a punta
+ * floor   radio minimo del trazo, en pixeles reales (0 = sin piso)
+ * shadow  la elevacion del trazo; a tamano de bandeja es solo barro */
+function draw(c, S, { span, floor, shadow }) {
   // ── fondo ──
   // gris neutro puro, como el chrome de la app: el icono tambien evita el tinte
   const bg = c.createLinearGradient(0, 0, 0, S);
@@ -63,7 +72,7 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
     if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y;
   }
   const bw = x1 - x0, bh = y1 - y0;
-  const target = S * 0.62;
+  const target = S * span;
   const k = Math.min(target / bw, target / bh);
   const offX = (S - bw * k) / 2 - x0 * k;
   const offY = (S - bh * k) / 2 - y0 * k;
@@ -71,7 +80,7 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 
   // ── ancho variable: la misma campana de presion del preview del pincel ──
   const BASE = S * 0.042;
-  const radius = (t) => BASE * (0.30 + 0.70 * Math.pow(Math.sin(Math.PI * t), 0.62));
+  const radius = (t) => Math.max(floor, BASE * (0.30 + 0.70 * Math.pow(Math.sin(Math.PI * t), 0.62)));
 
   /* Se rasteriza segmento por segmento — trapecio mas las dos puntas en un mismo
    * path, igual que el motor — y NO como un contorno offseteado de punta a
@@ -115,16 +124,56 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
    * dibujara cada segmento con sombra activada, los cientos de sombras
    * superpuestas darian una mancha negra en vez de una elevacion suave. */
   c.save();
-  c.shadowColor = 'rgba(0,0,0,.55)';
-  c.shadowBlur = S * 0.04;
-  c.shadowOffsetY = S * 0.014;
+  if (shadow) {
+    c.shadowColor = 'rgba(0,0,0,.55)';
+    c.shadowBlur = S * 0.04;
+    c.shadowOffsetY = S * 0.014;
+  }
   c.drawImage(shape, 0, 0);
   c.restore();
+}
 
-  window.__ready = true;
-})();
+draw(document.getElementById('c').getContext('2d'), ${SIZE}, { span: 0.62, floor: 0, shadow: true });
+
+/* La bandeja: el mismo objeto, ajustado a lo chico. El dibujo crece al 68 % del
+ * lienzo y el trazo lleva un piso de ~1.2 px de ancho en pixeles reales — sin
+ * eso, a 16 px las puntas quedan en 0.4 px y la curva se corta en pedazos. Se
+ * exporta con toDataURL y no con una captura de la ventana: una captura sale
+ * escalada por el DPI del monitor, y aca cada pixel tiene que ser uno. */
+window.__tray = ${JSON.stringify(TRAY_SIZES)}.map((S) => {
+  const cv = document.createElement('canvas');
+  cv.width = S; cv.height = S;
+  draw(cv.getContext('2d'), S, { span: 0.68, floor: 0.6, shadow: false });
+  return { size: S, png: cv.toDataURL('image/png') };
+});
+
+window.__ready = true;
 </script>
 </body></html>`;
+
+/* Un .ico es una cabecera, una entrada de 16 bytes por tamano y los PNG pegados
+ * atras. Windows acepta PNG adentro del .ico desde Vista, asi que no hace falta
+ * pasar por BMP ni por ImageMagick. */
+function packIco(frames) {
+  const head = Buffer.alloc(6 + 16 * frames.length);
+  head.writeUInt16LE(0, 0);
+  head.writeUInt16LE(1, 2);                 // 1 = icono
+  head.writeUInt16LE(frames.length, 4);
+  let offset = head.length;
+  frames.forEach(({ size, data }, i) => {
+    const e = 6 + 16 * i;
+    head.writeUInt8(size >= 256 ? 0 : size, e);
+    head.writeUInt8(size >= 256 ? 0 : size, e + 1);
+    head.writeUInt8(0, e + 2);              // sin paleta
+    head.writeUInt8(0, e + 3);
+    head.writeUInt16LE(1, e + 4);           // planos
+    head.writeUInt16LE(32, e + 6);          // bits por pixel
+    head.writeUInt32LE(data.length, e + 8);
+    head.writeUInt32LE(offset, e + 12);
+    offset += data.length;
+  });
+  return Buffer.concat([head, ...frames.map((f) => f.data)]);
+}
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
@@ -136,7 +185,16 @@ app.whenReady().then(async () => {
   const img = await win.webContents.capturePage();
   const out = path.join(__dirname, 'icon.png');
   fs.writeFileSync(out, img.toPNG());
-  win.destroy();
   process.stdout.write(`wrote ${out} (${img.getSize().width}x${img.getSize().height})\n`);
+
+  const tray = await win.webContents.executeJavaScript('window.__tray');
+  const frames = tray.map(({ size, png }) => ({
+    size, data: Buffer.from(png.slice(png.indexOf(',') + 1), 'base64'),
+  }));
+  const trayOut = path.join(__dirname, 'tray.ico');
+  fs.writeFileSync(trayOut, packIco(frames));
+  process.stdout.write(`wrote ${trayOut} (${TRAY_SIZES.join('/')})\n`);
+
+  win.destroy();
   app.quit();
 });

@@ -46,6 +46,7 @@
       "renderer/**/*",
       "build/icon.ico",
       "build/icon.png",
+      "build/tray.ico",
       "package.json",
       "!renderer/js/dev/**",
       "!renderer/selftest.html"
