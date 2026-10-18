@@ -426,7 +426,9 @@ function createWindow({ opener = null, seed = null } = {}) {
       await fs.mkdir(path.dirname(UI_SHOT), { recursive: true });
       await fs.writeFile(UI_SHOT, img.toPNG());
       console.log(`[ui] ${UI_SHOT}`);
-      app.quit();
+      /* exit y no quit: en los modos que dibujan el documento queda sucio, y
+       * quit dispararia la pregunta de cambios sin guardar, que nadie contesta. */
+      app.exit(0);
     });
   }
 
