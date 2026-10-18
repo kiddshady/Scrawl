@@ -1,10 +1,12 @@
 'use strict';
 
 const {
-  app, BrowserWindow, Menu, Tray, ipcMain, dialog, protocol, screen, clipboard, nativeImage, shell,
+  app, BrowserWindow, Menu, Tray, ipcMain, dialog, protocol, screen, clipboard, ClipboardItem,
+  shell,
 } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
+const { fileURLToPath } = require('url');
 const fs = require('fs/promises');
 
 const RENDERER = path.join(__dirname, 'renderer');
@@ -606,23 +608,38 @@ ipcMain.handle('file:open-image', async (e) => {
 // sacarle a un nombre de archivo
 const IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'];
 
+/* Desde Electron 44 el portapapeles del main es el de la web: asincrono, y sin
+ * readImage, readHTML ni readBuffer. Todo sale de clipboard.read(), que entrega
+ * los items con los tipos MIME que el sistema tiene a mano; un bitmap de otra
+ * app llega como image/png y una lista de archivos como text/uri-list. */
+async function clipboardBytes(items, type) {
+  const item = items.find((it) => it.types.includes(type));
+  if (!item) return null;
+  try {
+    return Buffer.from(await (await item.getType(type)).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 /* Ruta de imagen dejada en el portapapeles COMO ARCHIVO en vez de como pixeles.
  *
  * No es un caso raro: ShareX — y varios capturadores mas — vienen configurados
  * para copiar el archivo guardado, no el bitmap. El portapapeles queda entonces
  * con una lista de archivos y ni una imagen a la vista. Los chats lo pegan igual
  * porque saben leer archivos, asi que desde afuera parece que la captura esta
- * ahi y que la app que no la ve esta rota. Windows sintetiza FileNameW a partir
- * de la lista, que es la via mas simple de leerla; con varios archivos copiados
- * entrega el primero, que es justo lo que uno querria pegar. */
-function clipboardImagePath() {
-  for (const [format, enc] of [['FileNameW', 'ucs2'], ['FileName', 'latin1']]) {
-    let buf = null;
-    try { buf = clipboard.readBuffer(format); } catch { continue; }
-    if (!buf || !buf.length) continue;
-    // el formato viene terminado en NUL; la ruta es lo de antes
-    const file = buf.toString(enc).split('\0')[0].trim();
-    if (file && IMAGE_EXT.includes(path.extname(file).toLowerCase())) return file;
+ * ahi y que la app que no la ve esta rota. Chromium expone la lista como
+ * text/uri-list, una URL file:// por renglon; con varios archivos copiados se
+ * toma la primera imagen, que es justo lo que uno querria pegar. */
+async function clipboardImagePath(items) {
+  const list = await clipboardBytes(items, 'text/uri-list');
+  if (!list) return null;
+  for (const line of list.toString('utf8').split(/\r?\n/)) {
+    // los renglones con # son comentarios en el formato uri-list
+    if (!line.startsWith('file:')) continue;
+    let file;
+    try { file = fileURLToPath(line.trim()); } catch { continue; }
+    if (IMAGE_EXT.includes(path.extname(file).toLowerCase())) return file;
   }
   return null;
 }
@@ -642,19 +659,26 @@ function clipboardImagePath() {
  *   html   un <img> con ese MISMO PNG adentro (data URL) y la marca de la capa —
  *          nombre, opacidad, blend y en que punto del lienzo estaba
  *
- * El HTML es el unico lugar donde entra la marca: Electron no deja agregar un
- * formato propio junto a la imagen (cada escritura vacia el portapapeles), y un
- * texto plano con JSON aparece como basura en cualquier campo de texto. El HTML
- * solo lo miran las apps que saben que hacer con el, y ademas trae el PNG
- * intacto: los bytes que se pegan en la otra ventana son los que se copiaron,
- * sin pasar por el bitmap del sistema. */
+ * El HTML es el unico lugar donde entra la marca: un formato propio junto a la
+ * imagen no lo lee ninguna otra app, y un texto plano con JSON aparece como
+ * basura en cualquier campo de texto. El HTML solo lo miran las apps que saben
+ * que hacer con el, y ademas trae el PNG intacto: los bytes que se pegan en la
+ * otra ventana son los que se copiaron, sin pasar por el bitmap del sistema
+ * (que Chromium reencodea al leerlo). */
 const LAYER_MARK = 'data-scrawl-layer';
 
-ipcMain.handle('clipboard:write-layer', (_e, { data, meta }) => {
+function pngBlob(png) {
+  return new Blob([png], { type: 'image/png' });
+}
+
+ipcMain.handle('clipboard:write-layer', async (_e, { data, meta }) => {
   const png = Buffer.from(data);
   const mark = encodeURIComponent(JSON.stringify(meta));
   const html = `<img src="data:image/png;base64,${png.toString('base64')}" ${LAYER_MARK}="${mark}">`;
-  clipboard.write({ image: nativeImage.createFromBuffer(png), html });
+  await clipboard.write([new ClipboardItem({
+    'image/png': pngBlob(png),
+    'text/html': new Blob([html], { type: 'text/html' }),
+  })]);
   return { ok: true };
 });
 
@@ -662,8 +686,8 @@ ipcMain.handle('clipboard:write-layer', (_e, { data, meta }) => {
  * o null. Se mira ANTES que la imagen a secas — es la misma imagen, pero con
  * nombre y posicion — y solo se reconoce la propia: el HTML que deja un
  * navegador al copiar una foto no la tiene y sigue el camino de siempre. */
-function clipboardLayer() {
-  const html = clipboard.readHTML();
+async function clipboardLayer(items) {
+  const html = (await clipboardBytes(items, 'text/html'))?.toString('utf8');
   if (!html) return null;
   const mark = html.match(new RegExp(`${LAYER_MARK}="([^"]+)"`));
   const src = html.match(/src="data:image\/png;base64,([^"]+)"/);
@@ -676,13 +700,14 @@ function clipboardLayer() {
 }
 
 ipcMain.handle('clipboard:read-image', async () => {
-  const own = clipboardLayer();
+  const items = await clipboard.read();
+  const own = await clipboardLayer(items);
   if (own) return own;
 
-  const img = clipboard.readImage();
-  if (img && !img.isEmpty()) return { data: img.toPNG() };
+  const png = await clipboardBytes(items, 'image/png');
+  if (png && png.length) return { data: png };
 
-  const file = clipboardImagePath();
+  const file = await clipboardImagePath(items);
   if (!file) return null;
   try {
     return { data: await fs.readFile(file), path: file };
@@ -693,8 +718,8 @@ ipcMain.handle('clipboard:read-image', async () => {
   }
 });
 
-ipcMain.handle('clipboard:write-image', (_e, { data }) => {
-  clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(data)));
+ipcMain.handle('clipboard:write-image', async (_e, { data }) => {
+  await clipboard.write([new ClipboardItem({ 'image/png': pngBlob(Buffer.from(data)) })]);
   return { ok: true };
 });
 
