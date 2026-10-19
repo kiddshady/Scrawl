@@ -21,6 +21,33 @@ import { openModal } from './modal.js';
 import { el, toast } from './controls.js';
 import { icon } from './icons.js';
 
+/* Un numero que corre desde lo que se ve AHORA hasta el nuevo: el porcentaje
+ * llega de a pedazos, y cada aviso retoma la carrera desde donde iba en vez de
+ * saltar. La primera vez escribe sin correr. Es el roll() de Opal; no destella,
+ * porque un destello en cada pedazo titilaria. */
+function roll(node, to, paint, duration = 420) {
+  const st = node.__roll;
+  if (!st) { node.__roll = { cur: to, to, raf: 0 }; paint(to); return; }
+  if (st.to === to) return;
+  cancelAnimationFrame(st.raf);
+  st.to = to;
+  const from = st.cur;
+  const start = performance.now();
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const frame = (now) => {
+    const k = ease(Math.min(1, (now - start) / duration));
+    st.cur = from + (to - from) * k;
+    paint(st.cur);
+    if (k < 1) st.raf = requestAnimationFrame(frame);
+  };
+  st.raf = requestAnimationFrame(frame);
+}
+
+function forget(node) {
+  if (node.__roll) cancelAnimationFrame(node.__roll.raf);
+  node.__roll = null;
+}
+
 export function initUpdate({ isDirty, save }) {
   const chip = document.getElementById('sc-update');
   const chipIcon = document.getElementById('sc-update-icon');
@@ -28,6 +55,8 @@ export function initUpdate({ isDirty, save }) {
 
   let state = { status: 'idle' };
   let dialog = null;        // el modal, mientras este abierto
+  let painted = null;       // el estado que el dialogo tiene dibujado
+  let fill = null;          // la barra del dialogo, mientras baja
 
   // ── pastilla ──────────────────────────────────────────────────────────────
 
@@ -43,9 +72,14 @@ export function initUpdate({ isDirty, save }) {
     }
 
     chipIcon.replaceChildren(icon(status === 'ready' ? 'restart' : 'download', 12));
-    chipLabel.textContent = status === 'downloading'
-      ? `Downloading ${percent ?? 0}%`
-      : status === 'ready' ? 'Restart to update' : `Update ${version}`;
+    /* Bajando, el porcentaje corre de un valor al otro en vez de saltar en cada
+     * aviso. Fuera de la descarga se escribe directo y la carrera se olvida. */
+    if (status === 'downloading') {
+      roll(chipLabel, percent ?? 0, (v) => { chipLabel.textContent = `Downloading ${Math.round(v)}%`; });
+    } else {
+      forget(chipLabel);
+      chipLabel.textContent = status === 'ready' ? 'Restart to update' : `Update ${version}`;
+    }
     chip.setAttribute('data-tip', status === 'ready'
       ? `Scrawl ${version} is ready — it installs when you restart`
       : status === 'downloading' ? `Downloading Scrawl ${version}` : `Scrawl ${version} is available`);
@@ -67,7 +101,7 @@ export function initUpdate({ isDirty, save }) {
       title: state.status === 'ready' ? 'Ready to update' : 'Update available',
       iconName: state.status === 'ready' ? 'restart' : 'download',
       width: 400,
-      onClose: () => { dialog = null; },
+      onClose: () => { dialog = null; painted = null; fill = null; },
     });
 
     paintDialog();
@@ -80,6 +114,16 @@ export function initUpdate({ isDirty, save }) {
   function paintDialog() {
     if (!dialog) return;
     const { status, version, current, notes, percent, portable } = state;
+
+    /* Mientras baja, cada aviso solo mueve la barra. Rehacer el cuerpo en cada
+     * porcentaje hacia nacer la barra de nuevo (saltaba sin su transicion) y
+     * devolvia arriba el scroll de las notas. */
+    if (status === 'downloading' && painted === 'downloading' && fill) {
+      fill.style.width = `${percent ?? 0}%`;
+      return;
+    }
+    painted = status;
+    fill = null;
 
     dialog.setTitle(
       status === 'ready' ? 'Ready to update'
@@ -98,7 +142,7 @@ export function initUpdate({ isDirty, save }) {
 
     if (status === 'downloading') {
       const bar = el('div', 'sc-progress');
-      const fill = el('div', 'sc-progress__fill');
+      fill = el('div', 'sc-progress__fill');
       fill.style.width = `${percent ?? 0}%`;
       bar.append(fill);
       body.push(bar);
